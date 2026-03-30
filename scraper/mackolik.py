@@ -2,13 +2,17 @@
 scraper/mackolik.py
 ───────────────────
 Maç listesi : https://vd.mackolik.com/livedata?date=DD/MM/YYYY
-              Yanıt: { "e": [[canlı_id, mac_id, ?, ülke_id, lig_id,
-                               lig_adı, lig_kodu, ev_id, ev_sahibi,
-                               dep_id, deplasman, saat, ...], ...],
-                       "m": {...},   # muhtemelen market/iddaa bilgisi
-                       "t": {...} }  # muhtemelen takım/turnuva bilgisi
-
 Maç oranları: https://arsiv.mackolik.com/Mac/{mac_id}/{slug}  (HTML)
+
+vd.mackolik.com yanıt yapısı:
+  {
+    "e":  [[canlı_id, mac_id, ?, ülke_id, lig_id, lig_adı, lig_kodu,
+             ev_id, ev_sahibi, dep_id, deplasman, saat, durum, ev_skor,
+             dep_skor, ?, ?, ?, dakika], ...],
+    "m":  { mac_id_str: [...] },   # iddaa market bilgisi
+    "t":  { ... },
+    "eId": ...
+  }
 """
 
 from __future__ import annotations
@@ -53,34 +57,16 @@ ODDS_DIALOG_PATTERN = re.compile(
     r"\)"
 )
 
-# ── Array index sabitleri (vd.mackolik.com/livedata "e" listesi) ──────────────
-# [0]  canlı/event id      — scraper'da kullanılmıyor
-# [1]  mac_id              — arsiv.mackolik.com/Mac/{mac_id}/...
-# [2]  ?
-# [3]  ülke id
-# [4]  lig id
-# [5]  lig adı             — "İtalya Serie C Grup C"
-# [6]  lig kodu            — "İTC"
-# [7]  ev sahibi id
-# [8]  ev sahibi adı       — "Casertana"
-# [9]  deplasman id
-# [10] deplasman adı       — "Sorrento Calcio"
-# [11] saat                — "21:39"
-# [12] durum?              (1 = canlı, 2 = bitti vs.)
-# [13] ev sahibi skoru
-# [14] deplasman skoru
-# [15..17] ?
-# [18] dakika / durum metni — "9'" / "MS"
-
-IDX_MAC_ID    = 1
-IDX_LIG_ADI   = 5
-IDX_LIG_KODU  = 6
-IDX_EV_ADI    = 8
-IDX_DEP_ADI   = 10
-IDX_SAAT      = 11
+# Array index sabitleri
+IDX_MAC_ID   = 1
+IDX_LIG_ADI  = 5
+IDX_LIG_KODU = 6
+IDX_EV_ADI   = 8
+IDX_DEP_ADI  = 10
+IDX_SAAT     = 11
 
 
-# ─── Veri Modelleri ───────────────────────────────────────────────────────────
+# ─── Modeller ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class Outcome:
@@ -112,7 +98,7 @@ class Market:
 @dataclass
 class MatchListing:
     mac_id:     int
-    slug:       str          # ilk aşamada mac_id string — detay URL çekince slug bulunur
+    slug:       str
     home_team:  str
     away_team:  str
     league:     str
@@ -147,7 +133,7 @@ class MatchOdds:
         }
 
 
-# ─── HTTP Session ─────────────────────────────────────────────────────────────
+# ─── Session ──────────────────────────────────────────────────────────────────
 
 class MackolikSession:
     def __init__(self, request_delay: float = 1.5, max_retries: int = 3):
@@ -166,7 +152,7 @@ class MackolikSession:
             except requests.RequestException as exc:
                 logger.warning(
                     "Deneme %d/%d başarısız: %s → %s",
-                    attempt, self.max_retries, url, exc
+                    attempt, self.max_retries, url, exc,
                 )
                 if attempt == self.max_retries:
                     raise
@@ -179,7 +165,6 @@ class MackolikSession:
 def fetch_listings(session: MackolikSession, date: str) -> list[MatchListing]:
     dt       = datetime.strptime(date, "%Y-%m-%d")
     api_date = dt.strftime("%d/%m/%Y")
-
     logger.info("Listing API: %s?date=%s", LIVEDATA_URL, api_date)
 
     try:
@@ -198,59 +183,41 @@ def fetch_listings(session: MackolikSession, date: str) -> list[MatchListing]:
 
 
 def _parse_livedata(data: dict, date: str) -> list[MatchListing]:
-    """
-    Yanıt yapısı:
-      {
-        "e":  [[...], [...]],   ← maç array'leri
-        "m":  {...},            ← iddaa/market bilgisi (mac_id → flag)
-        "t":  {...},            ← takım/turnuva meta
-        "eId": ...
-      }
-    """
     if not isinstance(data, dict):
         logger.error("Beklenmeyen API yanıt tipi: %s", type(data))
         return []
 
     events = data.get("e", [])
     if not events:
-        logger.warning("API 'e' anahtarında veri yok. Anahtarlar: %s", list(data.keys()))
+        logger.warning("'e' anahtarında veri yok. Anahtarlar: %s", list(data.keys()))
         return []
 
-    # "m" anahtarı iddaa olan maçları tutabilir — logla
+    # ── 'm' anahtarından iddaa mac_id seti oluştur ──
     m_data = data.get("m", {})
-    t_data = data.get("t", {})
-    logger.info(
-        "'m' anahtarı: %d kayıt | 't' anahtarı: %d kayıt",
-        len(m_data) if isinstance(m_data, dict) else len(m_data or []),
-        len(t_data) if isinstance(t_data, dict) else len(t_data or []),
-    )
-    if m_data:
-        # İlk 3 elemanı logla — yapıyı anlamak için
-        sample = list(m_data.items())[:3] if isinstance(m_data, dict) else list(m_data)[:3]
-        logger.info("'m' örnek (ilk 3): %s", sample)
-    if t_data:
-        sample = list(t_data.items())[:3] if isinstance(t_data, dict) else list(t_data)[:3]
-        logger.info("'t' örnek (ilk 3): %s", sample)
-
-    # mac_id → iddaa flag seti oluştur
-    # "m" dict ise key'ler mac_id string olabilir
     iddaa_mac_ids: set[int] = set()
-    if isinstance(m_data, dict):
+
+    if isinstance(m_data, dict) and m_data:
         for k in m_data:
             try:
                 iddaa_mac_ids.add(int(k))
             except (ValueError, TypeError):
                 pass
-    elif isinstance(m_data, list):
+        logger.info("'m' anahtarından %d iddaa mac_id'si alındı.", len(iddaa_mac_ids))
+    elif isinstance(m_data, list) and m_data:
         for item in m_data:
-            if isinstance(item, (int, str)):
-                try:
-                    iddaa_mac_ids.add(int(item))
-                except (ValueError, TypeError):
-                    pass
+            try:
+                iddaa_mac_ids.add(int(item))
+            except (ValueError, TypeError):
+                pass
+        logger.info("'m' listesinden %d iddaa mac_id'si alındı.", len(iddaa_mac_ids))
+    else:
+        logger.warning(
+            "'m' anahtarı boş veya tanımsız — "
+            "tüm maçlar dahil edilecek, detay sayfasında oran kontrolü yapılacak."
+        )
 
-    logger.info("İddaa mac_id seti boyutu: %d", len(iddaa_mac_ids))
-
+    # ── Event'leri parse et — duplicate'leri at (mac_id bazında) ──
+    seen_mac_ids: set[int] = set()
     listings: list[MatchListing] = []
 
     for row in events:
@@ -262,22 +229,25 @@ def _parse_livedata(data: dict, date: str) -> list[MatchListing]:
         except (ValueError, TypeError):
             continue
 
-        home_team  = str(row[IDX_EV_ADI]  or "")
-        away_team  = str(row[IDX_DEP_ADI] or "")
-        league     = str(row[IDX_LIG_ADI] or "")
-        lig_kodu   = str(row[IDX_LIG_KODU] or "")
-        match_time = str(row[IDX_SAAT]    or "")[:5]
+        # Duplicate kontrolü
+        if mac_id in seen_mac_ids:
+            continue
+        seen_mac_ids.add(mac_id)
 
-        # İddaa kontrolü
+        home_team  = str(row[IDX_EV_ADI]   or "").strip()
+        away_team  = str(row[IDX_DEP_ADI]  or "").strip()
+        league     = str(row[IDX_LIG_ADI]  or "").strip()
+        lig_kodu   = str(row[IDX_LIG_KODU] or "").strip()
+        match_time = str(row[IDX_SAAT]     or "").strip()[:5]
+
         if iddaa_mac_ids:
             has_iddaa = mac_id in iddaa_mac_ids
         else:
-            # "m" boşsa ya yapı anlaşılamadıysa hepsini dahil et
-            has_iddaa = True
+            has_iddaa = True   # 'm' boşsa hepsini dene
 
         listings.append(MatchListing(
             mac_id=mac_id,
-            slug=str(mac_id),    # slug olmadan sadece ID ile URL dene
+            slug=str(mac_id),
             home_team=home_team,
             away_team=away_team,
             league=league,
@@ -286,11 +256,14 @@ def _parse_livedata(data: dict, date: str) -> list[MatchListing]:
             has_iddaa=has_iddaa,
         ))
 
-    logger.info("%s için %d maç listelendi.", date, len(listings))
+    logger.info(
+        "%s için %d tekil maç listelendi (%d toplam event'ten).",
+        date, len(listings), len(events),
+    )
     return listings
 
 
-# ─── Maç Detay ────────────────────────────────────────────────────────────────
+# ─── Detay ────────────────────────────────────────────────────────────────────
 
 def fetch_match_detail(
     session:    MackolikSession,
@@ -298,16 +271,10 @@ def fetch_match_detail(
     match_date: str,
 ) -> Optional[MatchOdds]:
     """
-    Önce /Mac/{mac_id}/{slug} dener.
-    Slug bilinmiyorsa /Mac/{mac_id}/ ile redirect'i takip eder
-    ve gerçek slug'ı URL'den çeker.
+    /Mac/{mac_id}/ ile çeker — sunucu gerçek slug'a redirect eder.
+    Redirect URL'inden slug'ı çekip listing'e kaydeder.
     """
-    # Slug henüz sadece mac_id string ise redirect'li URL dene
-    slug = listing.slug
-    if slug == str(listing.mac_id):
-        url = f"https://arsiv.mackolik.com/Mac/{listing.mac_id}/"
-    else:
-        url = MATCH_URL.format(mac_id=listing.mac_id, slug=slug)
+    url = f"https://arsiv.mackolik.com/Mac/{listing.mac_id}/"
 
     try:
         resp = session.get(url)
@@ -315,17 +282,15 @@ def fetch_match_detail(
         logger.error("mac_id=%d çekilemedi: %s", listing.mac_id, exc)
         return None
 
-    # Gerçek slug'ı final URL'den al (redirect olduysa)
-    final_url = resp.url
-    m = re.search(r"/Mac/\d+/([^/?#]+)", final_url)
+    # Slug'ı final URL'den al
+    m = re.search(r"/Mac/\d+/([^/?#]+)", resp.url)
     if m:
-        slug = m.group(1)
-        listing.slug = slug
+        listing.slug = m.group(1)
 
-    return parse_match_detail(resp.text, listing, match_date)
+    return _parse_detail(resp.text, listing, match_date)
 
 
-def parse_match_detail(html: str, listing: MatchListing, match_date: str) -> MatchOdds:
+def _parse_detail(html: str, listing: MatchListing, match_date: str) -> MatchOdds:
     markets = _parse_odds_from_js(html)
 
     if not markets:
@@ -418,7 +383,7 @@ def _parse_odds_from_divs(soup: BeautifulSoup) -> list[Market]:
     return markets
 
 
-# ─── Ana Scraper ──────────────────────────────────────────────────────────────
+# ─── Scraper ──────────────────────────────────────────────────────────────────
 
 class MackolikScraper:
     def __init__(self, request_delay: float = 1.5, max_retries: int = 3):
@@ -454,11 +419,12 @@ class MackolikScraper:
             return [], []
 
         if dry_run:
-            logger.info("[DRY RUN] %d maç:", len(filtered))
+            logger.info("[DRY RUN] %d maç listelendi:", len(filtered))
             for l in filtered:
+                iddaa_flag = "✓ iddaa" if l.has_iddaa else "✗"
                 logger.info(
-                    "  mac_id=%-8d  %-35s vs %-35s  %s",
-                    l.mac_id, l.home_team, l.away_team, l.league,
+                    "  mac_id=%-8d  %-30s vs %-30s  %-30s  %s",
+                    l.mac_id, l.home_team, l.away_team, l.league, iddaa_flag,
                 )
             return [], []
 
@@ -475,21 +441,15 @@ class MackolikScraper:
             match_obj = fetch_match_detail(self.session, listing, date)
 
             if match_obj is None:
-                errors.append({
-                    "mac_id": listing.mac_id,
-                    "error":  "fetch failed",
-                })
+                errors.append({"mac_id": listing.mac_id, "error": "fetch failed"})
                 continue
 
             if not match_obj.markets:
                 logger.warning("mac_id=%d oran yok, atlanıyor.", listing.mac_id)
                 continue
 
-            logger.info("  ✓ %d market", len(match_obj.markets))
+            logger.info("  ✓ %d market  slug=%s", len(match_obj.markets), match_obj.slug)
             results.append(match_obj)
 
-        logger.info(
-            "Tamamlandı: %d başarılı, %d hatalı.",
-            len(results), len(errors),
-        )
+        logger.info("Tamamlandı: %d başarılı, %d hatalı.", len(results), len(errors))
         return results, errors
