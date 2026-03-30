@@ -3,51 +3,28 @@ scraper/pipeline.py
 ───────────────────
 Sofascore + Mackolik birleşik pipeline.
 
+Akış:
+  1. Mackolik listing  → o günün iddaa maç listesi
+  2. Mackolik detail   → her maç için iddaa oranları (HTML)
+  3. Sofascore bulk    → /sport/football/odds/1/{date} (tek istek, 1X2)
+  4. Sofascore enrich  → eşleşen her maç için /event/{id}/odds/1/all
+
 Çıktı yapısı (her maç için):
 {
   "match_date":    "2026-03-29",
-  "match_time":    "18:00",
-
-  # Kimlik
-  "sofa_event_id": 14083488,      # null → sadece Mackolik
-  "mac_id":        4437085,        # null → sadece Sofascore
-
-  # Takım / Lig (Sofascore öncelikli, yoksa Mackolik)
-  "home_team":     "Cultural Leonesa",
-  "away_team":     "FC Andorra",
-  "tournament":    "LaLiga 2",
+  "match_time":    "20:45",
+  "sofa_event_id": 14083488,       # null → sadece Mackolik
+  "mac_id":        4437085,        # null → sadece Sofascore bulk (gelecek)
+  "home_team":     "FC Andorra",
+  "away_team":     "Cultural Leonesa",
+  "tournament":    "LaLiga 2",     # Sofascore'dan
   "country":       "Spain",
-  "league":        "İspanya LaLiga 2",   # Mackolik Türkçe
-
-  # Skor (maç bittiyse)
-  "home_score":    0,
-  "away_score":    4,
+  "league":        "İspanya...",   # Mackolik Türkçe
+  "home_score":    4,
+  "away_score":    0,
   "status":        "finished",
-
-  # Oranlar
-  "sofascore_markets": [          # Sofascore: açılış + kapanış + kazanan
-    {
-      "market_id":    1,
-      "market_name":  "Full time",
-      "market_group": "1X2",
-      "market_period": "Full-time",
-      "choice_group": null,
-      "choices": [
-        {"name": "1", "opening_odds": 2.45, "closing_odds": 2.20, "winning": false, "change": -1},
-        ...
-      ]
-    }
-  ],
-  "mackolik_markets": [           # Mackolik: iddaa oranları
-    {
-      "market_name":  "Maç Sonucu",
-      "market_code":  "43901",
-      "outcomes": [
-        {"name": "1", "odds": 2.32},
-        ...
-      ]
-    }
-  ]
+  "sofascore_markets": [...],      # açılış + kapanış + winning flag
+  "mackolik_markets":  [...]       # iddaa oranları
 }
 """
 
@@ -57,10 +34,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .sofascore import SofascoreScraper, SofaMatch
-from .mackolik import MackolikScraper, MatchListing, fetch_match_detail
-from .matcher import match_events, MatchPair
-
 logger = logging.getLogger(__name__)
 
 
@@ -68,20 +41,16 @@ logger = logging.getLogger(__name__)
 class MergedMatch:
     match_date:    str
     match_time:    str
-
     sofa_event_id: Optional[int]
     mac_id:        Optional[int]
-
     home_team:     str
     away_team:     str
     tournament:    str
     country:       str
-    league:        str      # Mackolik Türkçe lig adı
-
+    league:        str
     home_score:    Optional[int]
     away_score:    Optional[int]
     status:        str
-
     sofascore_markets: list = field(default_factory=list)
     mackolik_markets:  list = field(default_factory=list)
 
@@ -107,137 +76,129 @@ class MergedMatch:
 class CombinedPipeline:
     def __init__(
         self,
-        sofa_delay:      float = 0.5,
-        mac_delay:       float = 1.5,
-        max_retries:     int   = 3,
-        fetch_sofa_all:  bool  = False,   # /odds/1/all her maç için
-        match_threshold: float = 0.5,
+        sofa_delay:       float = 0.8,
+        mac_delay:        float = 1.5,
+        max_retries:      int   = 3,
+        fetch_sofa_all:   bool  = False,
+        iddaa_only:       bool  = True,
     ):
-        self.sofa    = SofascoreScraper(request_delay=sofa_delay, max_retries=max_retries)
-        self.mac_session = MackolikScraper(request_delay=mac_delay, max_retries=max_retries).session
-        self.fetch_sofa_all  = fetch_sofa_all
-        self.match_threshold = match_threshold
+        self.sofa_delay     = sofa_delay
+        self.mac_delay      = mac_delay
+        self.max_retries    = max_retries
+        self.fetch_sofa_all = fetch_sofa_all
+        self.iddaa_only     = iddaa_only
 
     def run(self, date: str) -> tuple[list[MergedMatch], dict]:
-        """
-        Tam pipeline.
-        Returns: (merged_matches, stats)
-        """
+        from .mackolik import MackolikScraper, MackolikSession, fetch_listings, fetch_match_detail
+        from .sofascore import SofascoreClient
+
         stats = {
-            "sofa_total":    0,
-            "mac_total":     0,
-            "matched":       0,
-            "sofa_only":     0,
-            "mac_only":      0,
-            "mac_no_odds":   0,
-            "errors":        [],
+            "mac_total":   0,
+            "mac_odds":    0,
+            "sofa_matched": 0,
+            "errors":      [],
         }
 
-        # ── 1. Sofascore maç listesi + oranlar ────────────────────────────────
-        logger.info("── Sofascore başlatılıyor ──")
-        sofa_matches = self.sofa.scrape_date(date, fetch_all_markets=self.fetch_sofa_all)
-        stats["sofa_total"] = len(sofa_matches)
-        logger.info("Sofascore: %d maç", len(sofa_matches))
+        # ── 1. Mackolik listing ───────────────────────────────────────────────
+        logger.info("── Mackolik listing ──")
+        mac_session = MackolikSession(request_delay=self.mac_delay, max_retries=self.max_retries)
+        listings    = fetch_listings(mac_session, date)
 
-        # ── 2. Mackolik maç listesi ────────────────────────────────────────────
-        logger.info("── Mackolik listesi başlatılıyor ──")
-        from .mackolik import fetch_listings, MackolikSession
-        mac_session   = MackolikSession(request_delay=1.5)
-        mac_listings  = fetch_listings(mac_session, date)
-        stats["mac_total"] = len(mac_listings)
-        logger.info("Mackolik: %d maç", len(mac_listings))
+        if self.iddaa_only:
+            listings = [l for l in listings if l.has_iddaa]
+        stats["mac_total"] = len(listings)
+        logger.info("Mackolik: %d maç listelendi", len(listings))
 
-        # ── 3. Eşleştirme ─────────────────────────────────────────────────────
-        logger.info("── Eşleştirme ──")
-        pairs, unmatched_sofa, unmatched_mac = match_events(
-            sofa_matches, mac_listings, threshold=self.match_threshold
+        if not listings:
+            return [], stats
+
+        # ── 2. Mackolik detail (iddaa oranları) ──────────────────────────────
+        logger.info("── Mackolik oranları çekiliyor ──")
+        mac_odds_map: dict[int, object] = {}
+
+        for idx, listing in enumerate(listings, 1):
+            logger.info("[%d/%d] mac_id=%d  %s vs %s",
+                        idx, len(listings), listing.mac_id,
+                        listing.home_team, listing.away_team)
+            odds = fetch_match_detail(mac_session, listing, date)
+            if odds and odds.markets:
+                mac_odds_map[listing.mac_id] = odds
+                stats["mac_odds"] += 1
+                logger.info("  ✓ %d iddaa marketi", len(odds.markets))
+            else:
+                logger.info("  – oran yok")
+
+        # ── 3. Sofascore enrich ───────────────────────────────────────────────
+        logger.info("── Sofascore enrich ──")
+        sofa_client  = SofascoreClient(request_delay=self.sofa_delay, max_retries=self.max_retries)
+
+        # Sadece Mackolik oranı bulunan maçları Sofascore ile zenginleştir
+        mac_with_odds = [l for l in listings if l.mac_id in mac_odds_map]
+
+        sofa_map = sofa_client.enrich_matches(
+            mac_matches=mac_with_odds,
+            date=date,
+            fetch_all_markets=self.fetch_sofa_all,
         )
-        stats["matched"]   = len(pairs)
-        stats["sofa_only"] = len(unmatched_sofa)
-        stats["mac_only"]  = len(unmatched_mac)
+        stats["sofa_matched"] = len(sofa_map)
 
-        # Kolay lookup
-        sofa_map = {sm.event_id: sm for sm in sofa_matches}
-        mac_map  = {ml.mac_id:   ml for ml in mac_listings}
-
+        # ── 4. Birleştir ─────────────────────────────────────────────────────
         results: list[MergedMatch] = []
 
-        # ── 4a. Eşleşen maçlar ────────────────────────────────────────────────
-        for pair in pairs:
-            sm = sofa_map[pair.sofa_event_id]
-            ml = mac_map[pair.mac_id]
+        listing_map = {l.mac_id: l for l in listings}
 
-            # Mackolik detayını çek
-            mac_odds = fetch_match_detail(mac_session, ml, date)
-            if mac_odds and not mac_odds.markets:
-                stats["mac_no_odds"] += 1
+        for listing in listings:
+            mac_odds  = mac_odds_map.get(listing.mac_id)
+            sofa_info = sofa_map.get(listing.mac_id)
 
-            results.append(MergedMatch(
-                match_date=date,
-                match_time=sm.match_time or ml.match_time,
-                sofa_event_id=sm.event_id,
-                mac_id=ml.mac_id,
-                home_team=sm.home_team,
-                away_team=sm.away_team,
-                tournament=sm.tournament,
-                country=sm.country,
-                league=ml.league,
-                home_score=sm.home_score,
-                away_score=sm.away_score,
-                status=sm.status,
-                sofascore_markets=sm.markets,
-                mackolik_markets=mac_odds.markets if mac_odds else [],
-            ))
+            # Sofascore meta
+            sofa_event_id = sofa_info["event_id"] if sofa_info else None
+            sofa_markets  = sofa_info["markets"]  if sofa_info else []
 
-        # ── 4b. Sadece Sofascore'da olanlar ───────────────────────────────────
-        for sm in unmatched_sofa:
-            results.append(MergedMatch(
-                match_date=date,
-                match_time=sm.match_time,
-                sofa_event_id=sm.event_id,
-                mac_id=None,
-                home_team=sm.home_team,
-                away_team=sm.away_team,
-                tournament=sm.tournament,
-                country=sm.country,
-                league="",
-                home_score=sm.home_score,
-                away_score=sm.away_score,
-                status=sm.status,
-                sofascore_markets=sm.markets,
-                mackolik_markets=[],
-            ))
+            # Meta: Sofascore'dan varsa kullan, yoksa Mackolik'ten
+            tournament = ""
+            country    = ""
+            home_score = None
+            away_score = None
+            status     = "unknown"
 
-        # ── 4c. Sadece Mackolik'te olanlar ────────────────────────────────────
-        for ml in unmatched_mac:
-            mac_odds = fetch_match_detail(mac_session, ml, date)
-            if mac_odds and not mac_odds.markets:
-                stats["mac_no_odds"] += 1
-                continue   # oranya yoksa dahil etme
+            if sofa_info and sofa_event_id:
+                from .sofascore import SofaEventMeta
+                # Meta cache'den çek (enrich_matches içinde doldu)
+                meta = sofa_client.session.get(f"/event/{sofa_event_id}")
+                if meta:
+                    try:
+                        from .sofascore import _parse_event_meta
+                        m = _parse_event_meta(meta.json().get("event", {}))
+                        if m:
+                            tournament = m.tournament
+                            country    = m.country
+                            home_score = m.home_score
+                            away_score = m.away_score
+                            status     = m.status
+                    except Exception:
+                        pass
 
             results.append(MergedMatch(
                 match_date=date,
-                match_time=ml.match_time,
-                sofa_event_id=None,
-                mac_id=ml.mac_id,
-                home_team=ml.home_team,
-                away_team=ml.away_team,
-                tournament="",
-                country="",
-                league=ml.league,
-                home_score=None,
-                away_score=None,
-                status="unknown",
-                sofascore_markets=[],
+                match_time=listing.match_time,
+                sofa_event_id=sofa_event_id,
+                mac_id=listing.mac_id,
+                home_team=listing.home_team,
+                away_team=listing.away_team,
+                tournament=tournament,
+                country=country,
+                league=listing.league,
+                home_score=home_score,
+                away_score=away_score,
+                status=status,
+                sofascore_markets=sofa_markets,
                 mackolik_markets=mac_odds.markets if mac_odds else [],
             ))
 
         logger.info(
-            "Pipeline tamamlandı: %d toplam maç "
-            "(%d eşleşti | %d sadece Sofa | %d sadece Mac)",
-            len(results),
-            stats["matched"],
-            stats["sofa_only"],
-            stats["mac_only"],
+            "Pipeline tamamlandı: %d maç  "
+            "(%d iddaa oranı | %d Sofascore eşleşmesi)",
+            len(results), stats["mac_odds"], stats["sofa_matched"],
         )
         return results, stats
