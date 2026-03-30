@@ -61,14 +61,19 @@ concurrency:
 
 jobs:
   scrape:
-    name: "Oranları Çek → JSON.GZ"
+    name: "Oranları Çek → data/ klasörüne commit"
     runs-on: ubuntu-latest
     timeout-minutes: 180
+
+    permissions:
+      contents: write
 
     steps:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Python 3.12
         uses: actions/setup-python@v5
@@ -90,37 +95,77 @@ jobs:
           fi
 
       - name: Oranları çek
+        id: scrape
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          mkdir -p output
+          mkdir -p data
           DATE=${{ steps.set_date.outputs.date }}
+          OUTFILE="data/odds_${DATE}.json.gz"
 
           ARGS="--date $DATE"
           ARGS="$ARGS --mode ${{ inputs.mode }}"
           ARGS="$ARGS --sofa-delay ${{ inputs.sofa_delay }}"
           ARGS="$ARGS --mac-delay ${{ inputs.mac_delay }}"
-          ARGS="$ARGS --output-json output/odds_${DATE}_${{ inputs.mode }}.json.gz"
+          ARGS="$ARGS --output-json $OUTFILE"
 
-          [ "${{ inputs.dry_run }}"        = "true"  ] && ARGS="$ARGS --dry-run"
-          [ "${{ inputs.iddaa_only }}"     = "false" ] && ARGS="$ARGS --all"
-          [ "${{ inputs.sofa_all_markets }}" = "true" ] && ARGS="$ARGS --sofa-all-markets"
-          [ "${{ inputs.save_supabase }}"  = "false" ] && ARGS="$ARGS --no-supabase"
+          [ "${{ inputs.dry_run }}"           = "true"  ] && ARGS="$ARGS --dry-run"
+          [ "${{ inputs.iddaa_only }}"        = "false" ] && ARGS="$ARGS --all"
+          [ "${{ inputs.sofa_all_markets }}"  = "true"  ] && ARGS="$ARGS --sofa-all-markets"
+          [ "${{ inputs.save_supabase }}"     = "false" ] && ARGS="$ARGS --no-supabase"
 
           echo "Komut: python -m scraper.main $ARGS"
           python -m scraper.main $ARGS
 
-      - name: Dosya boyutu
-        if: "!inputs.dry_run"
-        run: ls -lh output/ 2>/dev/null || echo "output/ boş"
+          echo "outfile=$OUTFILE" >> $GITHUB_OUTPUT
 
-      - name: Artifact yükle
-        if: "!inputs.dry_run"
+      - name: Dosya bilgisi
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          FILE="${{ steps.scrape.outputs.outfile }}"
+          if [ -f "$FILE" ]; then
+            SIZE=$(du -sh "$FILE" | cut -f1)
+            LINES=$(zcat "$FILE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))")
+            echo "FILE_SIZE=$SIZE"         >> $GITHUB_ENV
+            echo "MATCH_COUNT=$LINES"      >> $GITHUB_ENV
+            echo "### 📦 Çıktı Dosyası" >> $GITHUB_STEP_SUMMARY
+            echo "| Alan | Değer |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Dosya | \`$FILE\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Boyut | $SIZE |" >> $GITHUB_STEP_SUMMARY
+            echo "| Maç sayısı | $LINES |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Git config
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: data/ klasörüne commit & push
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          DATE=${{ steps.set_date.outputs.date }}
+          FILE="${{ steps.scrape.outputs.outfile }}"
+
+          git add "$FILE"
+
+          if git diff --cached --quiet; then
+            echo "⏭️ Değişiklik yok, commit atlandı."
+          else
+            MATCH_COUNT="${{ env.MATCH_COUNT }}"
+            git commit -m "data: odds ${DATE} [${{ inputs.mode }}] — ${MATCH_COUNT} maç"
+            git push
+            echo "✅ Push edildi: $FILE"
+          fi
+
+      - name: Artifact yükle (yedek)
+        if: ${{ inputs.dry_run != true }}
         uses: actions/upload-artifact@v4
         with:
           name: "odds-${{ steps.set_date.outputs.date }}-${{ inputs.mode }}"
-          path: output/odds_*.json.gz
+          path: data/odds_*.json.gz
           retention-days: 90
           compression-level: 0
           if-no-files-found: warn
@@ -136,3 +181,4 @@ jobs:
           echo "| 🧪 Dry Run       | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 📈 Sofa Tüm Mkt  | ${{ inputs.sofa_all_markets }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 🗄️ Supabase      | ${{ inputs.save_supabase }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📁 Dosya Yolu    | data/odds_${{ steps.set_date.outputs.date }}.json.gz |" >> $GITHUB_STEP_SUMMARY
