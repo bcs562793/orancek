@@ -1,4 +1,4 @@
-name: 🏟️ Mackolik Odds Scraper
+name: 🏟️ Odds Scraper (Sofascore + Mackolik)
 
 on:
   workflow_dispatch:
@@ -9,8 +9,24 @@ on:
         default: ""
         type: string
 
+      mode:
+        description: "Kaynak"
+        required: false
+        default: "combined"
+        type: choice
+        options:
+          - combined
+          - sofa
+          - mac
+
+      sofa_all_markets:
+        description: "Sofascore: her maç için tüm marketleri çek (yavaş!)"
+        required: false
+        default: false
+        type: boolean
+
       iddaa_only:
-        description: "Sadece iddaa oranı olan maçlar"
+        description: "Mackolik: sadece iddaa oranı olan maçlar"
         required: false
         default: true
         type: boolean
@@ -22,33 +38,39 @@ on:
         type: boolean
 
       save_supabase:
-        description: "Supabase'e kaydet (secret gerekir)"
+        description: "Supabase'e kaydet"
         required: false
         default: false
         type: boolean
 
-      request_delay:
-        description: "İstekler arası bekleme (saniye)"
+      sofa_delay:
+        description: "Sofascore istek gecikmesi (s)"
+        required: false
+        default: "0.5"
+        type: string
+
+      mac_delay:
+        description: "Mackolik istek gecikmesi (s)"
         required: false
         default: "1.5"
         type: string
 
 concurrency:
-  group: mackolik-scraper
+  group: odds-scraper
   cancel-in-progress: false
 
 jobs:
   scrape:
     name: "Oranları Çek → JSON.GZ"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
 
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Python 3.12 kur
+      - name: Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -73,49 +95,44 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           mkdir -p output
+          DATE=${{ steps.set_date.outputs.date }}
 
-          ARGS="--date ${{ steps.set_date.outputs.date }}"
-          ARGS="$ARGS --delay ${{ inputs.request_delay }}"
-          ARGS="$ARGS --output-json output/odds_${{ steps.set_date.outputs.date }}.json.gz"
+          ARGS="--date $DATE"
+          ARGS="$ARGS --mode ${{ inputs.mode }}"
+          ARGS="$ARGS --sofa-delay ${{ inputs.sofa_delay }}"
+          ARGS="$ARGS --mac-delay ${{ inputs.mac_delay }}"
+          ARGS="$ARGS --output-json output/odds_${DATE}_${{ inputs.mode }}.json.gz"
 
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
-          fi
-
-          if [ "${{ inputs.iddaa_only }}" = "false" ]; then
-            ARGS="$ARGS --all"
-          fi
-
-          if [ "${{ inputs.save_supabase }}" = "false" ]; then
-            ARGS="$ARGS --no-supabase"
-          fi
+          [ "${{ inputs.dry_run }}"        = "true"  ] && ARGS="$ARGS --dry-run"
+          [ "${{ inputs.iddaa_only }}"     = "false" ] && ARGS="$ARGS --all"
+          [ "${{ inputs.sofa_all_markets }}" = "true" ] && ARGS="$ARGS --sofa-all-markets"
+          [ "${{ inputs.save_supabase }}"  = "false" ] && ARGS="$ARGS --no-supabase"
 
           echo "Komut: python -m scraper.main $ARGS"
           python -m scraper.main $ARGS
 
-      - name: JSON.GZ artifact yükle
-        if: "!inputs.dry_run && always()"
+      - name: Dosya boyutu
+        if: "!inputs.dry_run"
+        run: ls -lh output/ 2>/dev/null || echo "output/ boş"
+
+      - name: Artifact yükle
+        if: "!inputs.dry_run"
         uses: actions/upload-artifact@v4
         with:
-          name: "odds-${{ steps.set_date.outputs.date }}"
+          name: "odds-${{ steps.set_date.outputs.date }}-${{ inputs.mode }}"
           path: output/odds_*.json.gz
           retention-days: 90
+          compression-level: 0
           if-no-files-found: warn
-          compression-level: 0   # zaten gzip, tekrar sıkıştırma
 
-      - name: Dosya boyutunu göster
-        if: "!inputs.dry_run"
-        run: |
-          ls -lh output/ 2>/dev/null || echo "output/ boş"
-
-      - name: İş özeti
+      - name: Özet
         if: always()
         run: |
           echo "## 📊 Scrape Özeti" >> $GITHUB_STEP_SUMMARY
           echo "| Alan | Değer |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 📅 Tarih        | ${{ steps.set_date.outputs.date }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🧪 Dry Run      | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🎯 İddaa Only   | ${{ inputs.iddaa_only }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🗄️ Supabase     | ${{ inputs.save_supabase }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⏱️ Gecikme      | ${{ inputs.request_delay }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📅 Tarih         | ${{ steps.set_date.outputs.date }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚙️ Mod           | ${{ inputs.mode }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Dry Run       | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📈 Sofa Tüm Mkt  | ${{ inputs.sofa_all_markets }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🗄️ Supabase      | ${{ inputs.save_supabase }} |" >> $GITHUB_STEP_SUMMARY
