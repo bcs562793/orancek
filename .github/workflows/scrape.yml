@@ -1,0 +1,114 @@
+name: 🏟️ Mackolik Odds Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Tarih (YYYY-MM-DD) — boş bırakırsan bugün"
+        required: false
+        default: ""
+        type: string
+
+      iddaa_only:
+        description: "Sadece iddaa oranı olan maçlar"
+        required: false
+        default: true
+        type: boolean
+
+      dry_run:
+        description: "Dry run — Supabase'e kaydetme, sadece say"
+        required: false
+        default: false
+        type: boolean
+
+      request_delay:
+        description: "İstekler arası bekleme (saniye)"
+        required: false
+        default: "1.5"
+        type: string
+
+# Aynı anda sadece 1 çalışma — çakışmayı önler
+concurrency:
+  group: mackolik-scraper
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    name: "Oranları Çek → Supabase"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60       # 1 saat limit — takılırsa kendisi iptal eder
+
+    steps:
+
+      # ── 1. Repo checkout ──────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Python kurulumu ────────────────────────────────────────────────
+      - name: Python 3.12 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ── 3. Bağımlılıklar ──────────────────────────────────────────────────
+      - name: Bağımlılıkları yükle
+        run: pip install -r requirements.txt
+
+      # ── 4. Tarihi hesapla ─────────────────────────────────────────────────
+      # Boş girilirse bugünün tarihini kullan (UTC)
+      - name: Tarihi belirle
+        id: set_date
+        run: |
+          if [ -z "${{ inputs.date }}" ]; then
+            echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          else
+            echo "date=${{ inputs.date }}" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 5. Scraper çalıştır ───────────────────────────────────────────────
+      - name: Oranları çek
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          # Argüman listesi oluştur
+          ARGS="--date ${{ steps.set_date.outputs.date }}"
+          ARGS="$ARGS --delay ${{ inputs.request_delay }}"
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          if [ "${{ inputs.iddaa_only }}" = "false" ]; then
+            ARGS="$ARGS --all"
+          fi
+
+          # JSON artifacts için output klasörü
+          mkdir -p output
+          ARGS="$ARGS --output-json output/odds_${{ steps.set_date.outputs.date }}.json"
+
+          echo "Komut: python -m scraper.main $ARGS"
+          python -m scraper.main $ARGS
+
+      # ── 6. JSON çıktısını artifact olarak sakla ───────────────────────────
+      - name: JSON artifact yükle
+        if: "!inputs.dry_run && always()"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "odds-${{ steps.set_date.outputs.date }}"
+          path: output/odds_*.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ── 7. Özet çıktısı ───────────────────────────────────────────────────
+      - name: İş özeti
+        if: always()
+        run: |
+          echo "## 📊 Scrape Özeti" >> $GITHUB_STEP_SUMMARY
+          echo "| Alan | Değer |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📅 Tarih       | ${{ steps.set_date.outputs.date }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Dry Run     | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🎯 Iddaa Only  | ${{ inputs.iddaa_only }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏱️ Gecikme     | ${{ inputs.request_delay }}s |" >> $GITHUB_STEP_SUMMARY
