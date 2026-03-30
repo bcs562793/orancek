@@ -1,0 +1,54 @@
+name: Oran Analizi Testi
+
+# Sadece manuel olarak (veya API üzerinden) tetiklenmesi için workflow_dispatch kullanıyoruz
+on:
+  workflow_dispatch:
+    inputs:
+      mac_id:
+        description: 'Analiz edilecek maçın ID numarası (mac_id)'
+        required: true
+        type: string
+      date:
+        description: 'Tarih (Örn: 2026-03-30)'
+        required: true
+        type: string
+        default: '2026-03-30'
+      use_api:
+        description: 'Claude API kullanılsın mı? (Bunun için Repository Secrets ayarlamalısın)'
+        type: boolean
+        default: false
+
+jobs:
+  run-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Depoyu Klonla
+        uses: actions/checkout@v4
+
+      - name: Python Ortamını Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # Betik sadece standart kütüphaneleri (json, urllib, gzip vb.) kullandığı için 
+      # "pip install" adımına gerek yok!
+
+      - name: Lokal Analizi Çalıştır (API Kapalı)
+        if: ${{ !inputs.use_api }}
+        run: |
+          python test_analiz.py \
+            --github ${{ github.repository }} \
+            --date ${{ inputs.date }} \
+            --mac-id ${{ inputs.mac_id }} \
+            --no-api
+
+      - name: Claude API ile Analizi Çalıştır (API Açık)
+        if: ${{ inputs.use_api }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python test_analiz.py \
+            --github ${{ github.repository }} \
+            --date ${{ inputs.date }} \
+            --mac-id ${{ inputs.mac_id }}
