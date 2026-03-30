@@ -27,13 +27,23 @@ BASE_URL = "https://www.sofascore.com/api/v1"
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/146.0.0.0 Safari/537.36"
     ),
-    "Accept":          "application/json",
-    "Accept-Language": "tr-TR,tr;q=0.9",
-    "Referer":         "https://www.sofascore.com/",
+    "Accept":              "*/*",
+    "Accept-Language":     "tr,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding":     "gzip, deflate, br",
+    "Referer":             "https://www.sofascore.com/tr/football/",
+    "Cache-Control":       "no-cache",
+    "Pragma":              "no-cache",
+    "sec-ch-ua":           '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    "sec-ch-ua-mobile":    "?0",
+    "sec-ch-ua-platform":  '"macOS"',
+    "sec-fetch-dest":      "empty",
+    "sec-fetch-mode":      "cors",
+    "sec-fetch-site":      "same-origin",
+    "x-requested-with":    "d1e946",   # ← kritik anti-bot header
 }
 
 
