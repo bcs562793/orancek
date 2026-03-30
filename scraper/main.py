@@ -44,8 +44,6 @@ def parse_args() -> argparse.Namespace:
                    help="Sofascore: her maç için /odds/1/all çek (yavaş)")
     p.add_argument("--sofa-delay",  type=float, default=0.5)
     p.add_argument("--mac-delay",   type=float, default=1.5)
-    p.add_argument("--match-threshold", type=float, default=0.5,
-                   help="Takım adı eşleştirme eşiği (0-1)")
     p.add_argument("--output-json", metavar="PATH")
     p.add_argument("--no-supabase", action="store_true")
     return p.parse_args()
@@ -90,19 +88,13 @@ def main() -> None:
             sofa_delay=args.sofa_delay,
             mac_delay=args.mac_delay,
             fetch_sofa_all=args.sofa_all_markets,
-            match_threshold=args.match_threshold,
         )
 
         if args.dry_run:
-            # Dry run: sadece listele
-            from .sofascore import SofascoreScraper
+            # Dry run: sadece Mackolik listele
             from .mackolik import fetch_listings, MackolikSession
-            sofa_matches = SofascoreScraper(args.sofa_delay).fetch_scheduled_events(args.date)
             mac_listings = fetch_listings(MackolikSession(args.mac_delay), args.date)
-            from .matcher import match_events
-            pairs, u_sofa, u_mac = match_events(sofa_matches, mac_listings, args.match_threshold)
-            logger.info("[DRY RUN] Eşleşen: %d | Sadece Sofa: %d | Sadece Mac: %d",
-                        len(pairs), len(u_sofa), len(u_mac))
+            logger.info("[DRY RUN] Mackolik: %d maç", len(mac_listings))
             sys.exit(0)
 
         merged, stats = pipeline.run(args.date)
