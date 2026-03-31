@@ -161,10 +161,10 @@ class CombinedPipeline:
 
             # Meta: Sofascore'dan varsa kullan, yoksa Mackolik'ten
             tournament = ""
-            country    = ""
-            home_score = None
-            away_score = None
-            status     = "unknown"
+            country    = listing.country
+            home_score = listing.home_score   # Mackolik fallback
+            away_score = listing.away_score
+            status     = listing.status if listing.status else "unknown"
 
             if sofa_info and sofa_event_id:
                 from .sofascore import SofaEventMeta
