@@ -3,11 +3,30 @@ name: 🏟️ Odds Scraper (Sofascore + Mackolik)
 on:
   workflow_dispatch:
     inputs:
+
       date:
-        description: "Tarih (YYYY-MM-DD) — boş bırakırsan bugün"
+        description: "Tek tarih (YYYY-MM-DD) — boş bırakırsan bugün"
         required: false
         default: ""
         type: string
+
+      date_from:
+        description: "Aralık başlangıcı (YYYY-MM-DD) — date ile birlikte kullanma"
+        required: false
+        default: ""
+        type: string
+
+      date_to:
+        description: "Aralık bitişi (YYYY-MM-DD) — date_from ile birlikte kullanılır"
+        required: false
+        default: ""
+        type: string
+
+      split:
+        description: "Aralıkta her güne ayrı .json.gz yaz (kapalıysa tek birleşik dosya)"
+        required: false
+        default: false
+        type: boolean
 
       mode:
         description: "Kaynak"
@@ -63,7 +82,7 @@ jobs:
   scrape:
     name: "Oranları Çek → data/ klasörüne commit"
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360   # aralık modunda uzun sürebilir
 
     permissions:
       contents: write
@@ -85,15 +104,33 @@ jobs:
       - name: Bağımlılıkları yükle
         run: pip install -r requirements.txt
 
-      - name: Tarihi belirle
-        id: set_date
+      # ── Tarih / aralık parametrelerini çöz ────────────────────────────────
+      - name: Tarih parametrelerini belirle
+        id: dates
         run: |
-          if [ -z "${{ inputs.date }}" ]; then
-            echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          DATE_FROM="${{ inputs.date_from }}"
+          DATE_TO="${{ inputs.date_to }}"
+          DATE="${{ inputs.date }}"
+
+          if [ -n "$DATE_FROM" ]; then
+            # Aralık modu
+            [ -z "$DATE_TO" ] && DATE_TO=$(date -u +%Y-%m-%d)
+            echo "mode=range"     >> $GITHUB_OUTPUT
+            echo "date_from=$DATE_FROM" >> $GITHUB_OUTPUT
+            echo "date_to=$DATE_TO"     >> $GITHUB_OUTPUT
+            echo "label=${DATE_FROM}_${DATE_TO}" >> $GITHUB_OUTPUT
+            echo "📅 Aralık modu: $DATE_FROM → $DATE_TO"
           else
-            echo "date=${{ inputs.date }}" >> $GITHUB_OUTPUT
+            # Tek gün modu
+            [ -z "$DATE" ] && DATE=$(date -u +%Y-%m-%d)
+            echo "mode=single"    >> $GITHUB_OUTPUT
+            echo "date_from=$DATE"     >> $GITHUB_OUTPUT
+            echo "date_to=$DATE"       >> $GITHUB_OUTPUT
+            echo "label=$DATE"         >> $GITHUB_OUTPUT
+            echo "📅 Tek gün modu: $DATE"
           fi
 
+      # ── Scraper çalıştır ──────────────────────────────────────────────────
       - name: Oranları çek
         id: scrape
         env:
@@ -101,42 +138,61 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           mkdir -p data
-          DATE=${{ steps.set_date.outputs.date }}
-          OUTFILE="data/odds_${DATE}.json.gz"
 
-          ARGS="--date $DATE"
+          # ── Argümanları oluştur ──
+          if [ "${{ steps.dates.outputs.mode }}" = "range" ]; then
+            ARGS="--date-from ${{ steps.dates.outputs.date_from }} --date-to ${{ steps.dates.outputs.date_to }}"
+            if [ "${{ inputs.split }}" = "true" ]; then
+              ARGS="$ARGS --split --output-json data/odds_{date}.json.gz"
+              echo "outpattern=data/odds_*.json.gz" >> $GITHUB_OUTPUT
+            else
+              OUTFILE="data/odds_${{ steps.dates.outputs.date_from }}_${{ steps.dates.outputs.date_to }}.json.gz"
+              ARGS="$ARGS --output-json $OUTFILE"
+              echo "outpattern=$OUTFILE" >> $GITHUB_OUTPUT
+              echo "outfile=$OUTFILE"    >> $GITHUB_OUTPUT
+            fi
+          else
+            DATE="${{ steps.dates.outputs.date_from }}"
+            OUTFILE="data/odds_${DATE}.json.gz"
+            ARGS="--date $DATE --output-json $OUTFILE"
+            echo "outpattern=$OUTFILE" >> $GITHUB_OUTPUT
+            echo "outfile=$OUTFILE"    >> $GITHUB_OUTPUT
+          fi
+
           ARGS="$ARGS --mode ${{ inputs.mode }}"
           ARGS="$ARGS --sofa-delay ${{ inputs.sofa_delay }}"
           ARGS="$ARGS --mac-delay ${{ inputs.mac_delay }}"
-          ARGS="$ARGS --output-json $OUTFILE"
 
-          [ "${{ inputs.dry_run }}"           = "true"  ] && ARGS="$ARGS --dry-run"
-          [ "${{ inputs.iddaa_only }}"        = "false" ] && ARGS="$ARGS --all"
-          [ "${{ inputs.sofa_all_markets }}"  = "true"  ] && ARGS="$ARGS --sofa-all-markets"
-          [ "${{ inputs.save_supabase }}"     = "false" ] && ARGS="$ARGS --no-supabase"
+          [ "${{ inputs.dry_run }}"          = "true"  ] && ARGS="$ARGS --dry-run"
+          [ "${{ inputs.iddaa_only }}"       = "false" ] && ARGS="$ARGS --all"
+          [ "${{ inputs.sofa_all_markets }}" = "true"  ] && ARGS="$ARGS --sofa-all-markets"
+          [ "${{ inputs.save_supabase }}"    = "false" ] && ARGS="$ARGS --no-supabase"
 
-          echo "Komut: python -m scraper.main $ARGS"
+          echo "▶ python -m scraper.main $ARGS"
           python -m scraper.main $ARGS
 
-          echo "outfile=$OUTFILE" >> $GITHUB_OUTPUT
-
+      # ── Dosya bilgisi ve özet ──────────────────────────────────────────────
       - name: Dosya bilgisi
         if: ${{ inputs.dry_run != true }}
         run: |
-          FILE="${{ steps.scrape.outputs.outfile }}"
-          if [ -f "$FILE" ]; then
+          TOTAL_MATCHES=0
+          echo "### 📦 Çıktı Dosyaları" >> $GITHUB_STEP_SUMMARY
+          echo "| Dosya | Boyut | Maç |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|-----|" >> $GITHUB_STEP_SUMMARY
+
+          for FILE in data/odds_${{ steps.dates.outputs.label }}*.json.gz data/odds_*.json.gz; do
+            [ -f "$FILE" ] || continue
             SIZE=$(du -sh "$FILE" | cut -f1)
             LINES=$(zcat "$FILE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))")
-            echo "FILE_SIZE=$SIZE"         >> $GITHUB_ENV
-            echo "MATCH_COUNT=$LINES"      >> $GITHUB_ENV
-            echo "### 📦 Çıktı Dosyası" >> $GITHUB_STEP_SUMMARY
-            echo "| Alan | Değer |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Dosya | \`$FILE\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Boyut | $SIZE |" >> $GITHUB_STEP_SUMMARY
-            echo "| Maç sayısı | $LINES |" >> $GITHUB_STEP_SUMMARY
-          fi
+            TOTAL_MATCHES=$((TOTAL_MATCHES + LINES))
+            echo "| \`$FILE\` | $SIZE | $LINES |" >> $GITHUB_STEP_SUMMARY
+          done | sort -u    # split modunda tekrar olmasın
 
+          echo "TOTAL_MATCHES=$TOTAL_MATCHES" >> $GITHUB_ENV
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Toplam maç: $TOTAL_MATCHES**" >> $GITHUB_STEP_SUMMARY
+
+      # ── Git commit ────────────────────────────────────────────────────────
       - name: Git config
         if: ${{ inputs.dry_run != true }}
         run: |
@@ -146,39 +202,40 @@ jobs:
       - name: data/ klasörüne commit & push
         if: ${{ inputs.dry_run != true }}
         run: |
-          DATE=${{ steps.set_date.outputs.date }}
-          FILE="${{ steps.scrape.outputs.outfile }}"
-
-          git add "$FILE"
+          git add data/odds_*.json.gz
 
           if git diff --cached --quiet; then
             echo "⏭️ Değişiklik yok, commit atlandı."
           else
-            MATCH_COUNT="${{ env.MATCH_COUNT }}"
-            git commit -m "data: odds ${DATE} [${{ inputs.mode }}] — ${MATCH_COUNT} maç"
+            LABEL="${{ steps.dates.outputs.label }}"
+            MODE="${{ inputs.mode }}"
+            COUNT="${TOTAL_MATCHES:-?}"
+            git commit -m "data: odds ${LABEL} [${MODE}] — ${COUNT} maç"
             git push
-            echo "✅ Push edildi: $FILE"
+            echo "✅ Push edildi."
           fi
 
+      # ── Artifact yükle ────────────────────────────────────────────────────
       - name: Artifact yükle (yedek)
         if: ${{ inputs.dry_run != true }}
         uses: actions/upload-artifact@v4
         with:
-          name: "odds-${{ steps.set_date.outputs.date }}-${{ inputs.mode }}"
+          name: "odds-${{ steps.dates.outputs.label }}-${{ inputs.mode }}"
           path: data/odds_*.json.gz
           retention-days: 90
           compression-level: 0
           if-no-files-found: warn
 
+      # ── İş özeti ─────────────────────────────────────────────────────────
       - name: Özet
         if: always()
         run: |
           echo "## 📊 Scrape Özeti" >> $GITHUB_STEP_SUMMARY
           echo "| Alan | Değer |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 📅 Tarih         | ${{ steps.set_date.outputs.date }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⚙️ Mod           | ${{ inputs.mode }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🧪 Dry Run       | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📈 Sofa Tüm Mkt  | ${{ inputs.sofa_all_markets }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🗄️ Supabase      | ${{ inputs.save_supabase }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📁 Dosya Yolu    | data/odds_${{ steps.set_date.outputs.date }}.json.gz |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📅 Dönem          | ${{ steps.dates.outputs.date_from }} → ${{ steps.dates.outputs.date_to }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚙️ Mod            | ${{ inputs.mode }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📂 Çıktı şekli   | $([ '${{ inputs.split }}' = 'true' ] && echo 'Ayrı dosyalar' || echo 'Tek birleşik') |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Dry Run        | ${{ inputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📈 Sofa Tüm Mkt   | ${{ inputs.sofa_all_markets }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🗄️ Supabase       | ${{ inputs.save_supabase }} |" >> $GITHUB_STEP_SUMMARY
