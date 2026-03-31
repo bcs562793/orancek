@@ -1,23 +1,18 @@
 """
 scraper/sofascore.py
 ────────────────────
-Sofascore odds client.
+Saf Sofascore client — Mackolik bağımlılığı yok.
 
-Bot koruması notu:
-  GitHub Actions AWS/Azure IP'lerinden geldiği için Sofascore'un Cloudflare
-  koruması standart requests ile 403 döndürür. curl_cffi kullanarak Chrome'un
-  gerçek TLS parmak izini (JA3/JA4) taklit ediyoruz.
+Akış (günlük 2 ana istek):
+  1. GET /sport/football/scheduled-events/{date}
+       → tüm futbol maçları, takım adları, skor, ilk yarı skoru
+  2. GET /sport/football/odds/1/{date}
+       → bulk opening + closing 1X2 oranları (event_id ile birleştir)
+  3. (opsiyonel) GET /event/{id}/odds/1/all  — sofa_all_markets=True ise
+       → maç başına tüm marketler
 
-Kullanılan endpoint'ler:
-  1. GET /sport/football/odds/1/{date}  → tüm günün event_id → 1X2 bulk oranları
-  2. GET /event/{id}                   → tek maç: takım adı, lig, skor, zaman
-  3. GET /event/{id}/odds/1/all        → tek maç tüm marketler
-
-Akış:
-  - Mackolik her zaman primary listing kaynağı
-  - Her Mackolik maçı için Sofascore event_id bulmak üzere
-    /event/{id} ile arama yapılır (küçük veri seti = makul istek sayısı)
-  - Eşleşme bulunamazsa Sofascore kısmı boş bırakılır
+Bot koruması:
+  curl_cffi ile Chrome124 TLS parmak izi taklit edilir.
 """
 
 from __future__ import annotations
@@ -53,10 +48,6 @@ HEADERS = {
 # ─── curl_cffi / requests fallback ────────────────────────────────────────────
 
 def _make_session():
-    """
-    curl_cffi varsa Chrome TLS parmak iziyle session döndür.
-    Yoksa standart requests.Session ile devam et (lokal test için yeterli).
-    """
     try:
         from curl_cffi import requests as cffi_requests
         session = cffi_requests.Session(impersonate="chrome124")
@@ -68,8 +59,8 @@ def _make_session():
         session = requests.Session()
         session.headers.update(HEADERS)
         logger.warning(
-            "curl_cffi bulunamadı, standart requests kullanılıyor. "
-            "GitHub Actions'da 403 alabilirsin — pip install curl_cffi ekle."
+            "curl_cffi bulunamadı — standart requests kullanılıyor. "
+            "GitHub Actions'da 403 alabilirsin."
         )
         return session, False
 
@@ -79,10 +70,10 @@ def _make_session():
 @dataclass
 class SofaChoice:
     name:         str
-    opening_odds: Optional[float]
-    closing_odds: Optional[float]
+    opening_odds: Optional[float]   # initialFractionalValue → decimal
+    closing_odds: Optional[float]   # fractionalValue → decimal
     winning:      Optional[bool]
-    change:       int
+    change:       int               # -1 düştü / 0 sabit / +1 yükseldi
 
     def to_dict(self) -> dict:
         return {
@@ -124,11 +115,41 @@ class SofaEventMeta:
     tournament:    str
     tournament_id: int
     country:       str
-    match_time:    str
+    match_date:    str   # YYYY-MM-DD
+    match_time:    str   # HH:MM UTC
     start_ts:      int
     home_score:    Optional[int]
     away_score:    Optional[int]
+    ht_home_score: Optional[int]
+    ht_away_score: Optional[int]
     status:        str
+
+
+@dataclass
+class SofaMatch:
+    meta:    SofaEventMeta
+    markets: list[SofaMarket] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        m = self.meta
+        return {
+            "match_date":        m.match_date,
+            "match_time":        m.match_time,
+            "sofa_event_id":     m.event_id,
+            "mac_id":            None,
+            "home_team":         m.home_team,
+            "away_team":         m.away_team,
+            "tournament":        m.tournament,
+            "country":           m.country,
+            "league":            m.tournament,
+            "home_score":        m.home_score,
+            "away_score":        m.away_score,
+            "ht_home_score":     m.ht_home_score,
+            "ht_away_score":     m.ht_away_score,
+            "status":            m.status,
+            "sofascore_markets": [mk.to_dict() for mk in self.markets],
+            "mackolik_markets":  [],
+        }
 
 
 # ─── Yardımcılar ──────────────────────────────────────────────────────────────
@@ -142,9 +163,7 @@ def frac_to_decimal(frac: str) -> Optional[float]:
     m = re.match(r"^(-?\d+)\s*/\s*(\d+)$", frac)
     if m:
         num, den = int(m.group(1)), int(m.group(2))
-        if den == 0:
-            return None
-        return round(num / den + 1, 4)
+        return round(num / den + 1, 4) if den else None
     try:
         return round(float(frac), 4)
     except ValueError:
@@ -152,15 +171,16 @@ def frac_to_decimal(frac: str) -> Optional[float]:
 
 
 def _parse_market(raw: dict) -> SofaMarket:
-    choices = []
-    for c in raw.get("choices", []):
-        choices.append(SofaChoice(
+    choices = [
+        SofaChoice(
             name=c.get("name", ""),
             opening_odds=frac_to_decimal(c.get("initialFractionalValue", "")),
             closing_odds=frac_to_decimal(c.get("fractionalValue", "")),
             winning=c.get("winning"),
             change=c.get("change", 0),
-        ))
+        )
+        for c in raw.get("choices", [])
+    ]
     return SofaMarket(
         market_id=raw.get("marketId", 0),
         market_name=raw.get("marketName", ""),
@@ -171,19 +191,25 @@ def _parse_market(raw: dict) -> SofaMarket:
     )
 
 
-def _parse_event_meta(raw: dict) -> Optional[SofaEventMeta]:
+def _parse_event_meta(raw: dict, date: str) -> Optional[SofaEventMeta]:
+    """scheduled-events yanıtından SofaEventMeta üret."""
     try:
-        home  = raw["homeTeam"]
-        away  = raw["awayTeam"]
-        tour  = raw.get("tournament", {})
-        cat   = tour.get("category", {})
-        uniq  = tour.get("uniqueTournament", {})
+        home = raw["homeTeam"]
+        away = raw["awayTeam"]
+        tour = raw.get("tournament", {})
+        cat  = tour.get("category", {})
+        uniq = tour.get("uniqueTournament", {})
 
         ts = raw.get("startTimestamp", 0)
         dt = datetime.fromtimestamp(ts, tz=timezone.utc)
 
-        h_score = raw.get("homeScore", {}).get("current") if "homeScore" in raw else None
-        a_score = raw.get("awayScore", {}).get("current") if "awayScore" in raw else None
+        # Tam skor
+        h_score = raw.get("homeScore", {}).get("current")
+        a_score = raw.get("awayScore", {}).get("current")
+
+        # İlk yarı skoru — period1 alanı
+        ht_h = raw.get("homeScore", {}).get("period1")
+        ht_a = raw.get("awayScore", {}).get("period1")
 
         return SofaEventMeta(
             event_id=raw["id"],
@@ -194,10 +220,13 @@ def _parse_event_meta(raw: dict) -> Optional[SofaEventMeta]:
             tournament=uniq.get("name") or tour.get("name", ""),
             tournament_id=uniq.get("id", 0),
             country=cat.get("name", ""),
+            match_date=date,
             match_time=dt.strftime("%H:%M"),
             start_ts=ts,
             home_score=h_score,
             away_score=a_score,
+            ht_home_score=ht_h,
+            ht_away_score=ht_a,
             status=raw.get("status", {}).get("type", "unknown"),
         )
     except (KeyError, TypeError) as exc:
@@ -205,29 +234,27 @@ def _parse_event_meta(raw: dict) -> Optional[SofaEventMeta]:
         return None
 
 
-# ─── Session ──────────────────────────────────────────────────────────────────
+# ─── HTTP Session ──────────────────────────────────────────────────────────────
 
 class SofascoreSession:
-    def __init__(self, request_delay: float = 0.8, max_retries: int = 3):
+    def __init__(self, request_delay: float = 0.5, max_retries: int = 3):
         self.delay       = request_delay
         self.max_retries = max_retries
         self._session, self._using_cffi = _make_session()
 
-    def get(self, path: str, **kwargs) -> Optional[object]:
+    def get(self, path: str, **kwargs):
         url = f"{BASE_URL}{path}"
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = self._session.get(url, timeout=20, **kwargs)
 
-                # curl_cffi ve requests her ikisinde de status_code var
                 if resp.status_code == 403:
                     logger.warning(
-                        "Sofascore 403 [deneme %d/%d]: %s%s",
-                        attempt, self.max_retries,
-                        "curl_cffi aktif ama yine de bloke — IP engeli olabilir. "
+                        "403 [%d/%d] %s — %s",
+                        attempt, self.max_retries, path,
+                        "curl_cffi aktif ama yine de bloke, IP kara listesi olabilir."
                         if self._using_cffi else
-                        "curl_cffi yok — requirements.txt'e ekle. ",
-                        path,
+                        "curl_cffi yok, requirements.txt'e ekle.",
                     )
                     time.sleep(self.delay * attempt * 4)
                     if attempt == self.max_retries:
@@ -236,7 +263,7 @@ class SofascoreSession:
 
                 if resp.status_code == 429:
                     wait = self.delay * attempt * 6
-                    logger.warning("Sofascore 429 (rate limit): %s — %ds bekleniyor", path, wait)
+                    logger.warning("429 rate limit: %s — %.0fs bekleniyor", path, wait)
                     time.sleep(wait)
                     if attempt == self.max_retries:
                         return None
@@ -247,9 +274,11 @@ class SofascoreSession:
                 return resp
 
             except Exception as exc:
-                # requests.HTTPError veya curl_cffi exception
                 status = getattr(getattr(exc, "response", None), "status_code", "?")
-                logger.warning("İstek hatası [deneme %d/%d] %s (HTTP %s): %s", attempt, self.max_retries, path, status, exc)
+                logger.warning(
+                    "İstek hatası [%d/%d] %s (HTTP %s): %s",
+                    attempt, self.max_retries, path, status, exc,
+                )
                 if attempt == self.max_retries:
                     return None
                 time.sleep(self.delay * attempt * 2)
@@ -257,46 +286,58 @@ class SofascoreSession:
         return None
 
 
-# ─── API Fonksiyonları ────────────────────────────────────────────────────────
+# ─── Ana Client ───────────────────────────────────────────────────────────────
 
 class SofascoreClient:
-    def __init__(self, request_delay: float = 0.8, max_retries: int = 3):
+    def __init__(self, request_delay: float = 0.5, max_retries: int = 3):
         self.session = SofascoreSession(request_delay, max_retries)
+
+    def fetch_scheduled_events(self, date: str) -> dict[int, SofaEventMeta]:
+        """
+        GET /sport/football/scheduled-events/{date}
+        Günün tüm futbol maçları — meta, skor, ilk yarı skoru.
+        Returns: {event_id: SofaEventMeta}
+        """
+        logger.info("Sofascore scheduled-events: %s", date)
+        resp = self.session.get(f"/sport/football/scheduled-events/{date}")
+        if resp is None:
+            return {}
+
+        result: dict[int, SofaEventMeta] = {}
+        for raw in resp.json().get("events", []):
+            meta = _parse_event_meta(raw, date)
+            if meta:
+                result[meta.event_id] = meta
+
+        logger.info("scheduled-events: %d maç alındı", len(result))
+        return result
 
     def fetch_bulk_1x2(self, date: str) -> dict[int, SofaMarket]:
         """
         GET /sport/football/odds/1/{date}
-        Tüm günün event_id → 1X2 (opening + closing) oranlarını tek istekte çeker.
+        Tüm günün opening + closing 1X2 oranları — tek istekte.
+        Returns: {event_id: SofaMarket}
         """
         logger.info("Sofascore bulk 1X2: %s", date)
         resp = self.session.get(f"/sport/football/odds/1/{date}")
         if resp is None:
             return {}
 
-        data = resp.json()
         result: dict[int, SofaMarket] = {}
-        for eid_str, raw in data.get("odds", {}).items():
+        for eid_str, raw in resp.json().get("odds", {}).items():
             try:
                 result[int(eid_str)] = _parse_market(raw)
             except (ValueError, TypeError):
                 continue
 
-        logger.info("Sofascore bulk 1X2: %d maç oranı alındı", len(result))
+        logger.info("bulk 1X2: %d maç oranı alındı", len(result))
         return result
 
-    def fetch_event_meta(self, event_id: int) -> Optional[SofaEventMeta]:
-        """GET /event/{id}"""
-        resp = self.session.get(f"/event/{event_id}")
-        if resp is None:
-            return None
-        try:
-            return _parse_event_meta(resp.json().get("event", {}))
-        except Exception as exc:
-            logger.debug("event_meta parse hatası %d: %s", event_id, exc)
-            return None
-
     def fetch_all_markets(self, event_id: int) -> list[SofaMarket]:
-        """GET /event/{id}/odds/1/all"""
+        """
+        GET /event/{id}/odds/1/all
+        Maç başına tüm marketler — alt/üst, KG, handikap vb.
+        """
         resp = self.session.get(f"/event/{event_id}/odds/1/all")
         if resp is None:
             return []
@@ -306,73 +347,60 @@ class SofascoreClient:
             logger.debug("all_markets parse hatası %d: %s", event_id, exc)
             return []
 
-    def enrich_matches(
-        self,
-        mac_matches: list,
-        date: str,
-        fetch_all_markets: bool = False,
-    ) -> dict[int, dict]:
-        """
-        Mackolik maç listesi için Sofascore event_id'lerini bul ve oranları ekle.
-        """
-        from .matcher import similarity
 
-        bulk = self.fetch_bulk_1x2(date)
-        if not bulk:
-            logger.warning("Sofascore bulk odds boş, Sofascore verisi atlanıyor.")
-            return {}
+# ─── Yüksek seviye Scraper ────────────────────────────────────────────────────
 
-        all_event_ids = list(bulk.keys())
-        logger.info("Bulk'ta %d event_id var", len(all_event_ids))
+class SofascoreScraper:
+    """
+    main.py'nin beklediği arayüz.
 
-        result: dict[int, dict] = {}
-        meta_cache: dict[int, SofaEventMeta] = {}
+    scrape_date() akışı:
+      1. scheduled-events  → meta + skor + iy skoru   (1 istek)
+      2. bulk 1X2          → opening/closing oranlar   (1 istek)
+      3. event_id ile birleştir — maç başına 0 ek istek
+      4. fetch_all_markets → tüm marketler (N istek — sofa_all_markets=True ise)
+    """
 
-        for mac in mac_matches:
-            best_eid:   Optional[int] = None
-            best_score: float         = 0.0
+    def __init__(self, request_delay: float = 0.5, max_retries: int = 3):
+        self._client = SofascoreClient(request_delay, max_retries)
 
-            for eid in all_event_ids:
-                if eid not in meta_cache:
-                    meta = self.fetch_event_meta(eid)
-                    meta_cache[eid] = meta
-                else:
-                    meta = meta_cache[eid]
+    def fetch_scheduled_events(self, date: str) -> dict:
+        """Dry-run için."""
+        return self._client.fetch_scheduled_events(date)
 
-                if meta is None:
-                    continue
+    def scrape_date(self, date: str, fetch_all_markets: bool = False) -> list[SofaMatch]:
+        logger.info("── Sofascore scrape: %s ──────────────────────────", date)
 
-                h = similarity(mac.home_team, meta.home_team)
-                a = similarity(mac.away_team, meta.away_team)
-                score = (h + a) / 2
+        # 1. Meta + skor + ilk yarı skoru (1 istek)
+        events = self._client.fetch_scheduled_events(date)
+        if not events:
+            logger.warning("scheduled-events boş — veri yok.")
+            return []
 
-                if score > best_score and score >= 0.5:
-                    best_score = score
-                    best_eid   = eid
+        # 2. Bulk 1X2 oranları (1 istek)
+        bulk = self._client.fetch_bulk_1x2(date)
 
-            if best_eid:
-                logger.info(
-                    "  ✓ mac_id=%-8d ↔ sofa_event_id=%-10d [%.2f] %s vs %s",
-                    mac.mac_id, best_eid, best_score,
-                    mac.home_team, mac.away_team,
-                )
-                markets = (
-                    self.fetch_all_markets(best_eid)
-                    if fetch_all_markets
-                    else [bulk[best_eid]]
-                )
-                result[mac.mac_id] = {
-                    "event_id": best_eid,
-                    "markets":  markets,
-                }
-            else:
-                logger.debug(
-                    "  ✗ mac_id=%-8d eşleşmedi: %s vs %s",
-                    mac.mac_id, mac.home_team, mac.away_team,
-                )
-
+        oranlı   = sum(1 for eid in events if eid in bulk)
+        orансız  = len(events) - oranlı
         logger.info(
-            "Sofascore enrich tamamlandı: %d / %d maç eşleşti",
-            len(result), len(mac_matches),
+            "Birleştirme: %d maç — %d oranlı, %d oran yok",
+            len(events), oranlı, orансız,
         )
-        return result
+
+        # 3. Birleştir + (opsiyonel) tüm marketler
+        matches: list[SofaMatch] = []
+        for event_id, meta in events.items():
+            base_market = bulk.get(event_id)
+
+            if fetch_all_markets:
+                # Her maç için 1 ek istek — sofa_all_markets=True ise
+                markets = self._client.fetch_all_markets(event_id)
+                if not markets and base_market:
+                    markets = [base_market]
+            else:
+                markets = [base_market] if base_market else []
+
+            matches.append(SofaMatch(meta=meta, markets=markets))
+
+        logger.info("scrape_date tamamlandı: %d maç", len(matches))
+        return matches
