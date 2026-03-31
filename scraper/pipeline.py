@@ -50,6 +50,8 @@ class MergedMatch:
     league:        str
     home_score:    Optional[int]
     away_score:    Optional[int]
+    ht_home_score: Optional[int]   # ilk yarı ev sahibi skoru
+    ht_away_score: Optional[int]   # ilk yarı deplasman skoru
     status:        str
     sofascore_markets: list = field(default_factory=list)
     mackolik_markets:  list = field(default_factory=list)
@@ -67,6 +69,8 @@ class MergedMatch:
             "league":        self.league,
             "home_score":    self.home_score,
             "away_score":    self.away_score,
+            "ht_home_score": self.ht_home_score,
+            "ht_away_score": self.ht_away_score,
             "status":        self.status,
             "sofascore_markets": [m.to_dict() for m in self.sofascore_markets],
             "mackolik_markets":  [m.to_dict() for m in self.mackolik_markets],
@@ -191,6 +195,8 @@ class CombinedPipeline:
                 league=listing.league,
                 home_score=home_score,
                 away_score=away_score,
+                ht_home_score=listing.ht_home_score,
+                ht_away_score=listing.ht_away_score,
                 status=status,
                 sofascore_markets=sofa_markets,
                 mackolik_markets=mac_odds.markets if mac_odds else [],

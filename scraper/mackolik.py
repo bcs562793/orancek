@@ -101,6 +101,10 @@ IDX_M_ORAN_X       = 19
 IDX_M_ORAN_2       = 20
 IDX_M_ORAN_4       = 21   # KG Var? / Alt-Üst?
 IDX_M_ORAN_5       = 22   # KG Yok? / Alt-Üst?
+IDX_M_FINAL_EV     = 29   # tam skor ev sahibi
+IDX_M_FINAL_DEP    = 30   # tam skor deplasman
+IDX_M_IY_EV        = 31   # ilk yarı ev sahibi
+IDX_M_IY_DEP       = 32   # ilk yarı deplasman
 IDX_M_TARIH        = 35
 IDX_M_LIG_META     = 36   # [ülke_id, ülke_adı, lig_id, lig_adı, ...]
 IDX_M_IDDAA_FLAG   = 37   # 1=iddaa var
@@ -151,6 +155,8 @@ class MatchListing:
     status:        str          # "MS", "Ert.", "", ...
     home_score:    Optional[int]
     away_score:    Optional[int]
+    ht_home_score: Optional[int]   # ilk yarı ev sahibi skoru
+    ht_away_score: Optional[int]   # ilk yarı deplasman skoru
     # Özet oranlar (m anahtarından)
     odds_1:        Optional[float]
     odds_x:        Optional[float]
@@ -173,6 +179,8 @@ class MatchOdds:
     status:     str
     home_score: Optional[int]
     away_score: Optional[int]
+    ht_home_score: Optional[int]   # ilk yarı ev sahibi skoru
+    ht_away_score: Optional[int]   # ilk yarı deplasman skoru
     # Özet (livedata'dan)
     odds_1:     Optional[float]
     odds_x:     Optional[float]
@@ -194,6 +202,8 @@ class MatchOdds:
             "status":      self.status,
             "home_score":  self.home_score,
             "away_score":  self.away_score,
+            "ht_home_score": self.ht_home_score,
+            "ht_away_score": self.ht_away_score,
             "odds_1":      self.odds_1,
             "odds_x":      self.odds_x,
             "odds_2":      self.odds_2,
@@ -302,6 +312,8 @@ def fetch_listings(session: MackolikSession, date: str) -> list[MatchListing]:
             status=str(row[IDX_M_DURUM] or ""),
             home_score=_safe_int(row[IDX_M_EV_SKOR]),
             away_score=_safe_int(row[IDX_M_DEP_SKOR]),
+            ht_home_score=_safe_int(row[IDX_M_IY_EV])  if len(row) > IDX_M_IY_EV  else None,
+            ht_away_score=_safe_int(row[IDX_M_IY_DEP]) if len(row) > IDX_M_IY_DEP else None,
             odds_1=_safe_float(row[IDX_M_ORAN_1]),
             odds_x=_safe_float(row[IDX_M_ORAN_X]),
             odds_2=_safe_float(row[IDX_M_ORAN_2]),
@@ -355,6 +367,8 @@ def fetch_match_detail(
         status=listing.status,
         home_score=listing.home_score,
         away_score=listing.away_score,
+        ht_home_score=listing.ht_home_score,
+        ht_away_score=listing.ht_away_score,
         odds_1=listing.odds_1,
         odds_x=listing.odds_x,
         odds_2=listing.odds_2,
@@ -487,6 +501,7 @@ class MackolikScraper:
                     country=l.country, match_time=l.match_time,
                     match_date=date, status=l.status,
                     home_score=l.home_score, away_score=l.away_score,
+                    ht_home_score=l.ht_home_score, ht_away_score=l.ht_away_score,
                     odds_1=l.odds_1, odds_x=l.odds_x, odds_2=l.odds_2,
                     markets=[],
                 )
