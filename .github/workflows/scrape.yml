@@ -175,22 +175,26 @@ jobs:
       - name: Dosya bilgisi
         if: ${{ inputs.dry_run != true }}
         run: |
-          TOTAL_MATCHES=0
           echo "### 📦 Çıktı Dosyaları" >> $GITHUB_STEP_SUMMARY
           echo "| Dosya | Boyut | Maç |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|-----|" >> $GITHUB_STEP_SUMMARY
 
-          for FILE in data/odds_${{ steps.dates.outputs.label }}*.json.gz data/odds_*.json.gz; do
-            [ -f "$FILE" ] || continue
+          # Pipe yerine process substitution kullan — subshell olmadan TOTAL_MATCHES güncellenir
+          TOTAL_MATCHES=0
+          SEEN=""
+          while IFS= read -r -d '' FILE; do
+            [[ "$SEEN" == *"|$FILE|"* ]] && continue
+            SEEN="$SEEN|$FILE|"
             SIZE=$(du -sh "$FILE" | cut -f1)
             LINES=$(zcat "$FILE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))")
             TOTAL_MATCHES=$((TOTAL_MATCHES + LINES))
             echo "| \`$FILE\` | $SIZE | $LINES |" >> $GITHUB_STEP_SUMMARY
-          done | sort -u    # split modunda tekrar olmasın
+          done < <(find data/ -name "odds_*.json.gz" -print0 | sort -z)
 
-          echo "TOTAL_MATCHES=$TOTAL_MATCHES" >> $GITHUB_ENV
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Toplam maç: $TOTAL_MATCHES**" >> $GITHUB_STEP_SUMMARY
+          echo "TOTAL_MATCHES=$TOTAL_MATCHES" >> $GITHUB_ENV
+          echo "Toplam maç (env): $TOTAL_MATCHES"
 
       # ── Git commit ────────────────────────────────────────────────────────
       - name: Git config
