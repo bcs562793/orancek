@@ -171,48 +171,48 @@ jobs:
           echo "▶ python -m scraper.main $ARGS"
           python -m scraper.main $ARGS
 
-      # ── Dosya bilgisi ve özet ──────────────────────────────────────────────
-      - name: Dosya bilgisi
-        if: ${{ inputs.dry_run != true }}
-        run: |
-          echo "### 📦 Çıktı Dosyaları" >> $GITHUB_STEP_SUMMARY
-          echo "| Dosya | Boyut | Maç |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|-----|" >> $GITHUB_STEP_SUMMARY
-
-          # Pipe yerine process substitution kullan — subshell olmadan TOTAL_MATCHES güncellenir
-          TOTAL_MATCHES=0
-          SEEN=""
-          while IFS= read -r -d '' FILE; do
-            [[ "$SEEN" == *"|$FILE|"* ]] && continue
-            SEEN="$SEEN|$FILE|"
-            SIZE=$(du -sh "$FILE" | cut -f1)
-            LINES=$(zcat "$FILE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))")
-            TOTAL_MATCHES=$((TOTAL_MATCHES + LINES))
-            echo "| \`$FILE\` | $SIZE | $LINES |" >> $GITHUB_STEP_SUMMARY
-          done < <(find data/ -name "odds_*.json.gz" -print0 | sort -z)
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Toplam maç: $TOTAL_MATCHES**" >> $GITHUB_STEP_SUMMARY
-          echo "TOTAL_MATCHES=$TOTAL_MATCHES" >> $GITHUB_ENV
-          echo "Toplam maç (env): $TOTAL_MATCHES"
-
-      # ── Git commit ────────────────────────────────────────────────────────
+      # ── Git config ────────────────────────────────────────────────────────
       - name: Git config
         if: ${{ inputs.dry_run != true }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: data/ klasörüne commit & push
+      # ── Dosya bilgisi + commit + push (tek adımda — env var geçişi yok) ──
+      - name: Commit & push
         if: ${{ inputs.dry_run != true }}
         run: |
           LABEL="${{ steps.dates.outputs.label }}"
           MODE="${{ inputs.mode }}"
-          COUNT="${TOTAL_MATCHES:-0}"
 
-          # 0 maç geldiyse boş dosyayı commit etme, workflow'u başarısız say
-          if [ "$COUNT" = "0" ] || [ "$COUNT" = "?" ]; then
-            echo "❌ Hiç maç çekilemedi — scraper hatası veya bot koruması. Commit atlandı."
+          # Maç sayısını doğrudan bu adımda say
+          TOTAL=0
+          SEEN=""
+          while IFS= read -r -d $'\0' FILE; do
+            [[ "$SEEN" == *"|$FILE|"* ]] && continue
+            SEEN="$SEEN|$FILE|"
+            N=$(zcat "$FILE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+            TOTAL=$((TOTAL + N))
+          done < <(find data/ -name "odds_*.json.gz" -print0 | sort -z)
+
+          echo "Toplam maç: $TOTAL"
+
+          # Özet tablosu
+          echo "### 📦 Çıktı Dosyaları" >> $GITHUB_STEP_SUMMARY
+          echo "| Dosya | Boyut | Maç |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          SEEN=""
+          while IFS= read -r -d $'\0' FILE; do
+            [[ "$SEEN" == *"|$FILE|"* ]] && continue
+            SEEN="$SEEN|$FILE|"
+            SIZE=$(du -sh "$FILE" | cut -f1)
+            N=$(zcat "$FILE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+            echo "| \`$FILE\` | $SIZE | $N |" >> $GITHUB_STEP_SUMMARY
+          done < <(find data/ -name "odds_*.json.gz" -print0 | sort -z)
+          echo "**Toplam: $TOTAL maç**" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$TOTAL" = "0" ]; then
+            echo "❌ Hiç maç çekilemedi. Commit atlandı."
             exit 1
           fi
 
@@ -221,12 +221,10 @@ jobs:
           if git diff --cached --quiet; then
             echo "⏭️ Değişiklik yok, commit atlandı."
           else
-            git commit -m "data: odds ${LABEL} [${MODE}] — ${COUNT} maç"
-            # Remote'da çakışan commit olabilir (paralel run vs. manuel push)
-            # --rebase ile local commit'i remote'un üstüne taşı
+            git commit -m "data: odds ${LABEL} [${MODE}] — ${TOTAL} maç"
             git pull --rebase origin main
             git push
-            echo "✅ Push edildi."
+            echo "✅ Push edildi: ${TOTAL} maç"
           fi
 
       # ── Artifact yükle ────────────────────────────────────────────────────
