@@ -297,6 +297,11 @@ def fetch_listings(session: MackolikSession, date: str) -> list[MatchListing]:
 
         lig_meta = row[IDX_M_LIG_META] if len(row) > IDX_M_LIG_META else []
 
+        # Sadece futbol (spor_id=1) — basketbol, tenis vb. atla
+        spor_id = lig_meta[11] if isinstance(lig_meta, list) and len(lig_meta) > 11 else None
+        if spor_id is not None and spor_id != 1:
+            continue
+
         listings.append(MatchListing(
             mac_id=mac_id,
             slug=str(mac_id),           # slug redirect ile alınır
@@ -322,9 +327,10 @@ def fetch_listings(session: MackolikSession, date: str) -> list[MatchListing]:
         ))
 
     iddaa_count = sum(1 for l in listings if l.has_iddaa)
+    total_raw   = len([r for r in m_data if isinstance(r, list) and len(r) >= 38])
     logger.info(
-        "%s: %d maç listelendi (%d iddaa)",
-        date, len(listings), iddaa_count
+        "%s: %d futbol maçı listelendi (%d iddaa) — toplam %d maçtan futbol filtresi uygulandı",
+        date, len(listings), iddaa_count, total_raw
     )
     return listings
 
