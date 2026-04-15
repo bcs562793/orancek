@@ -13,10 +13,14 @@ if not url or not key:
 supabase: Client = create_client(url, key)
 
 def generate_signals():
-    # Bülteni çek
-    response = supabase.table('match_odds').select('*').execute()
+    # Bülteni çek (Eğer matches tablosuyla foreign key varsa tarihi oradan joinler)
+    try:
+         response = supabase.table('match_odds').select('*, matches(match_date, match_time)').execute()
+    except Exception:
+         # Join başarısız olursa sadece match_odds çek
+         response = supabase.table('match_odds').select('*').execute()
+         
     matches = response.data
-
     signals_found = []
 
     for row in matches:
@@ -31,8 +35,6 @@ def generate_signals():
             odds_data = odds_data_raw
             
         markets = odds_data.get('markets', {})
-        
-        # Sofascore yerine kullandığımız oran/trend değişimi verisi
         markets_change = odds_data.get('markets_change', {})
         
         if not markets:
@@ -40,6 +42,23 @@ def generate_signals():
 
         # Maç ismi
         match_name = odds_data.get('nesine_name', f"Maç ID: {row.get('fixture_id')}")
+        
+        # --- TARİH VE ZAMAN ÇIKARIMI ---
+        match_date = "Tarih Belirsiz"
+        matches_join = row.get('matches')
+        
+        if matches_join and isinstance(matches_join, dict):
+            # matches tablosundan geliyorsa
+            m_date = matches_join.get('match_date', '')
+            m_time = matches_join.get('match_time', '')
+            match_date = f"{m_date} {m_time}".strip()
+        elif row.get('match_date'):
+            # Direkt bu tabloda kolon varsa
+            match_date = f"{row.get('match_date')} {row.get('match_time', '')}".strip()
+        elif row.get('updated_at'):
+            # Hiçbiri yoksa en son verinin çekildiği/güncellendiği zamanı baz al
+            match_date = row.get('updated_at')[:16].replace('T', ' ')
+
         match_signals = []
 
         # 1. Oranları Çekme
@@ -80,14 +99,18 @@ def generate_signals():
 
         # Sinyal varsa listeye yaz
         if match_signals:
-            signals_found.append({"match": match_name, "signals": match_signals})
+            signals_found.append({
+                "match": match_name, 
+                "date": match_date,
+                "signals": match_signals
+            })
 
     # Sonuçları Loglara Yazdır
     print(f"Toplam incelenen maç: {len(matches)}")
     print(f"Sinyal bulunan maç sayısı: {len(signals_found)}\n")
 
     for s in signals_found:
-        print(f"Maç: {s['match']}")
+        print(f"Tarih: {s['date']} | Maç: {s['match']}")
         for sig in s['signals']:
             print(f"  {sig}")
         print("-" * 50)
