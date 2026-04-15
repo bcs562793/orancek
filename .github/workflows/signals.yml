@@ -1,0 +1,29 @@
+name: Bahis Sinyal Tarayıcı
+
+on:
+  schedule:
+    # Günde 3 defa (Sabah 09:00, Öğle 13:00, Akşam 18:00 - UTC saatine göre ayarlanmıştır)
+    - cron: '0 6,10,15 * * *'
+  workflow_dispatch: # Actions sekmesinden manuel çalıştırma butonu ekler
+
+jobs:
+  scan_matches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Klonla
+        uses: actions/checkout@v3
+
+      - name: Python Kurulumu
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Bağımlılıkları Yükle
+        run: |
+          pip install supabase requests
+
+      - name: Sinyal Analizini Çalıştır
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python analyze_signals.py
