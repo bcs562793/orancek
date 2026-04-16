@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime, timedelta
 from supabase import create_client, Client
 
 # Supabase bağlantı ayarları (GitHub Actions Secret'lardan gelecek)
@@ -22,6 +23,9 @@ def generate_signals():
          
     matches = response.data
     signals_found = []
+    
+    # Türkiye saatini (UTC+3) hesapla
+    now_tr = datetime.utcnow() + timedelta(hours=3)
 
     for row in matches:
         # odds_data JSON kolonunu parse et
@@ -43,21 +47,45 @@ def generate_signals():
         # Maç ismi
         match_name = odds_data.get('nesine_name', f"Maç ID: {row.get('fixture_id')}")
         
-        # --- TARİH VE ZAMAN ÇIKARIMI ---
-        match_date = "Tarih Belirsiz"
+        # --- TARİH VE ZAMAN KONTROLÜ (GEÇMİŞ MAÇLARI ATLA) ---
+        match_date_str = "Tarih Belirsiz"
         matches_join = row.get('matches')
+        
+        is_past_match = False
         
         if matches_join and isinstance(matches_join, dict):
             # matches tablosundan geliyorsa
             m_date = matches_join.get('match_date', '')
-            m_time = matches_join.get('match_time', '')
-            match_date = f"{m_date} {m_time}".strip()
+            m_time = matches_join.get('match_time', '00:00')
+            match_date_str = f"{m_date} {m_time}".strip()
+            
+            try:
+                # Stringi datetime objesine çevir ve şu anki TR saatiyle kıyasla
+                match_dt = datetime.strptime(match_date_str, "%Y-%m-%d %H:%M")
+                if match_dt <= now_tr:
+                    is_past_match = True
+            except ValueError:
+                pass
+                
         elif row.get('match_date'):
             # Direkt bu tabloda kolon varsa
-            match_date = f"{row.get('match_date')} {row.get('match_time', '')}".strip()
-        elif row.get('updated_at'):
-            # Hiçbiri yoksa en son verinin çekildiği/güncellendiği zamanı baz al
-            match_date = row.get('updated_at')[:16].replace('T', ' ')
+            m_date = row.get('match_date')
+            m_time = row.get('match_time', '00:00')
+            match_date_str = f"{m_date} {m_time}".strip()
+            
+            try:
+                match_dt = datetime.strptime(match_date_str, "%Y-%m-%d %H:%M")
+                if match_dt <= now_tr:
+                    is_past_match = True
+            except ValueError:
+                pass
+        else:
+            # Tarih bulunamazsa son güncellenme tarihini al (Garantici yaklaşım)
+            match_date_str = row.get('updated_at')[:16].replace('T', ' ')
+
+        # Eğer maç geçmişte kalmışsa (saati geçmişse) bu maçı direkt atla!
+        if is_past_match:
+            continue
 
         match_signals = []
 
@@ -101,12 +129,12 @@ def generate_signals():
         if match_signals:
             signals_found.append({
                 "match": match_name, 
-                "date": match_date,
+                "date": match_date_str,
                 "signals": match_signals
             })
 
     # Sonuçları Loglara Yazdır
-    print(f"Toplam incelenen maç: {len(matches)}")
+    print(f"Toplam incelenen oynanmamış/gelecek maç: {len(matches)}")
     print(f"Sinyal bulunan maç sayısı: {len(signals_found)}\n")
 
     for s in signals_found:
