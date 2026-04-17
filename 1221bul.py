@@ -435,6 +435,7 @@ def generate_signals():
             .execute()
         )
     except Exception:
+      print(f"\n!!! SUPABASE SORGUSU PATLADI !!! Hata: {e}\n")
         response = supabase.table('match_odds').select('*').execute()
 
     rows   = response.data
