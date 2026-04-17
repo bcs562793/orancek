@@ -1,21 +1,27 @@
 """
 reversal_signals.py v2 — ScorePop Reversal (2/1 & 1/2) Sinyal Motoru
 ======================================================================
+84.749 maç analizinden çıkan 2/1 ve 1/2 geri dönüş sinyalleri
+Sofascore opening→closing trend verisiyle birleştirilmiştir.
 
-84.749 maç analizinden çıkan 2/1 ve 1/2 geri dönüş sinyallerini
-Sofascore oran hareket trendi (opening→closing change) ile birleştirerek
-daha yüksek lift elde eden kurallar uygulanır.
+YENİ BULGULAR (v2 — sofa trend analizi):
+  ─ 2/1 en güçlü pattern ─
+    • DCG(2.Y)≤1.7 + İY-2≥3.5 + Sofa(Ev↑,Dep↓) → 7.25% / 2.53x lift
+    • IYMS_2/1≤20 + Ev↑%5 + Dep↓%5             → 6.83% / 2.38x lift
+    • IYMS_2/1≤20 + Sofa(Ev↑,Dep↓)             → 5.95% / 2.08x lift
 
-YENİ BULGULAR (v2):
-  • 2/1 için en güçlü sofa pattern: ft_ch1=+1 AND ft_ch2=-1
-    (Ev oranı yükselmiş + Deplasman oranı düşmüş → lift 2.08x)
-  • 1/2 için en güçlü sofa pattern: ft_ch2=+1
-    (Deplasman oranı yükselmiş, piyasa uzaklaşmış → lift 2.37x)
+  ─ 1/2 en güçlü pattern ─
+    • MS-2≤2.0 + MS-1≥4.0 + Sofa(Dep↑,Ev↓)     → 5.47% / 2.47x lift
+    • MS-2≤2.0 + MS-1≥4.0 + Dep %2+ arttı       → 5.26% / 2.38x lift
+    • MS-2≤2.0 + MS-1≥4.0 + Sofa(Dep↑)          → 5.25% / 2.37x lift
 
 HATA DÜZELTMELERİ (v1'e göre):
-  1. Handikap key: 'ah_m1' → 'ah_p0_1'   (app.js format: h<a → 'ah_p{h}_{a}')
-  2. 2.Y Gol key:  'more_goals' subkey '2h'  (Daha Çok Gol Olacak Yarı: '2.Y')
-  3. Sofa key:  'x' yerine 'X' (beraberlik büyük X — Supabase normalize sonrası)
+  1. Handikap key:  'ah_m1'   → 'ah_p0_1'
+     Handikaplı Maç Sonucu (0:1): ev=0 < dep=1 → prefix 'p' → key 'ah_p0_1'
+  2. 2.Y Gol key:   '2h_ou15' yok → 'more_goals' / subkey '2h'
+     Daha Çok Gol Olacak Yarı: {'1h': ..., '2h': ..., 'equal': ...}
+  3. Sofa ber. key: küçük 'x' → büyük 'X' (Supabase normalize sonrası)
+  4. get_sofa_change() artık None döner (0 değil) — sofa yoksa bypass için
 
 ÇALIŞTIRMA:
   python reversal_signals.py
@@ -56,41 +62,62 @@ def get_market(markets: dict, key: str, subkey: str) -> float | None:
     """
     markets dict'inden belirli bir market ve alt anahtar değerini çeker.
 
-    Supabase'e app.js tarafından normalize edilmiş key formatları:
-      '1x2'        → Maç Sonucu        | subkeys: 'home', 'draw', 'away'
-      'ht_1x2'     → 1. Yarı Sonucu    | subkeys: 'home', 'draw', 'away'
-      '2h_1x2'     → 2. Yarı Sonucu    | subkeys: 'home', 'draw', 'away'
-      'ht_ft'      → İlk Yarı/Maç Son. | subkeys: '1/1','1/2','2/1' ...
-      'ah_p0_1'    → Handikap (0:1) Ev dezavantajlı  | 'home','draw','away'
-      'ah_m1_0'    → Handikap (1:0) Dep dezavantajlı | 'home','draw','away'
-      'more_goals' → Daha Çok Gol Yarı | subkeys: '1h', '2h', 'equal'
+    Supabase'de app.js normalize sonrası key→subkey formatları:
+      '1x2'          → Maç Sonucu          | 'home', 'draw', 'away'
+      'ht_1x2'       → 1. Yarı Sonucu      | 'home', 'draw', 'away'
+      '2h_1x2'       → 2. Yarı Sonucu      | 'home', 'draw', 'away'
+      'ht_ft'        → İlk Yarı/Maç Sonucu | '1/1','1/2','2/1','2/2' ...
+      'more_goals'   → Daha Çok Gol Yarı   | '1h', '2h', 'equal'
+      'ah_p0_1'      → Handikap (0:1) — Ev dezavantajlı (h=0 < a=1 → prefix p)
+      'ah_m1_0'      → Handikap (1:0) — Dep dezavantajlı
     """
     return safe_float(markets.get(key, {}).get(subkey))
 
 
 def get_sofa_change(sofa_1x2: dict | None, side: str) -> int | None:
     """
-    sofa_1x2 dict'inden change değerini okur.
+    sofa_1x2 dict'inden opening→closing change değerini okur.
 
-    Supabase'deki format (app.js _sofaTo1x2 çıktısı):
-      sofa_1x2['1']['change']  → ev       (-1=düştü/favori, 0=sabit, +1=yükseldi)
-      sofa_1x2['X']['change']  → beraberlik  (büyük X!)
-      sofa_1x2['2']['change']  → deplasman
+    Format (app.js _sofaTo1x2 çıktısı — Supabase'de odds_data.sofa_1x2):
+      sofa_1x2['1']['change']  → ev sahibi  (string key '1')
+      sofa_1x2['X']['change']  → beraberlik (büyük 'X'!)
+      sofa_1x2['2']['change']  → deplasman  (string key '2')
 
-    DİKKAT: Beraberlik key'i büyük 'X' — küçük 'x' değil!
-    None döner sofa verisi yoksa (oran yokluğu ile 0'dan fark edilebilsin diye).
+    Değerler:
+      -1 → kapanış oranı düştü (piyasa o tarafı daha çok favori gördü)
+       0 → sabit kaldı
+      +1 → kapanış oranı yükseldi (piyasa o taraftan uzaklaştı)
+
+    None döner sofa yoksa — 0 ile karıştırılmasın diye.
     """
     if not sofa_1x2:
         return None
-    val = sofa_1x2.get(side, {})
-    if not isinstance(val, dict) or 'change' not in val:
+    entry = sofa_1x2.get(side, {})
+    if not isinstance(entry, dict) or 'change' not in entry:
         return None
-    return int(val['change'])
+    return int(entry['change'])
+
+
+def get_sofa_pct(sofa_1x2: dict | None, side: str) -> float | None:
+    """
+    Opening→closing oran değişimini yüzde olarak döndürür.
+    Pozitif = oran yükseldi (piyasa uzaklaştı).
+    Negatif = oran düştü (piyasa favori gördü).
+    """
+    if not sofa_1x2:
+        return None
+    entry = sofa_1x2.get(side, {})
+    if not isinstance(entry, dict):
+        return None
+    o = safe_float(entry.get('opening_odds') or entry.get('open'))
+    c = safe_float(entry.get('closing_odds') or entry.get('close'))
+    if o and c and o > 0:
+        return (c - o) / o * 100
+    return None
 
 
 def parse_match_datetime(row: dict) -> datetime | None:
     """Maç tarih/saatini birden fazla kaynaktan arar."""
-    # 1. matches join objesi
     matches_join = row.get('matches')
     if matches_join and isinstance(matches_join, dict):
         m_date = matches_join.get('match_date', '')
@@ -99,8 +126,6 @@ def parse_match_datetime(row: dict) -> datetime | None:
             return datetime.strptime(f"{m_date} {m_time[:5]}", "%Y-%m-%d %H:%M")
         except ValueError:
             pass
-
-    # 2. Direkt kolonlar
     if row.get('match_date'):
         m_date = row.get('match_date', '')
         m_time = (row.get('match_time', '00:00') or '00:00')[:5]
@@ -108,8 +133,6 @@ def parse_match_datetime(row: dict) -> datetime | None:
             return datetime.strptime(f"{m_date} {m_time}", "%Y-%m-%d %H:%M")
         except ValueError:
             pass
-
-    # 3. odds_data içinde
     odds_data = row.get('_parsed_odds', {})
     if odds_data.get('match_date'):
         m_date = odds_data['match_date']
@@ -118,285 +141,271 @@ def parse_match_datetime(row: dict) -> datetime | None:
             return datetime.strptime(f"{m_date} {m_time}", "%Y-%m-%d %H:%M")
         except ValueError:
             pass
-
     return None
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 3. REVERSAL SINYAL KURALLARI (v2 — Sofa trend entegreli)
+# 3. REVERSAL SINYAL KURALLARI v2
+#    (Sofa opening→closing delta entegreli)
 # ─────────────────────────────────────────────────────────────────────
 
 def evaluate_reversal_signals(markets: dict, sofa_1x2: dict | None) -> list[dict]:
     """
-    84.749 maç analizinden çıkan 2/1 ve 1/2 reversal kuralları.
-    
-    Sofa change değerleri:
-      -1 → oran kapanışta düştü (o taraf piyasada daha favori oldu)
-       0 → sabit
-      +1 → oran kapanışta yükseldi (piyasa uzaklaştı)
-    
-    2/1 En güçlü sofa pattern: ft_ch1=+1 AND ft_ch2=-1
-      (Ev oranı yükselmesi + Dep oranı düşmesi → lift 2.08x)
-    1/2 En güçlü sofa pattern: ft_ch2=+1
-      (Dep oranı yükselmesi → lift 2.37x)
+    2/1 ve 1/2 reversal sinyallerini değerlendirir.
+    Her sinyal: {'type', 'rule', 'prec', 'lift', 'sofa_enhanced'}
+
+    Sofa change yorumu:
+      change = -1 → Favori oldu  (oran düştü)
+      change = +1 → Uzaklaştı    (oran yükseldi)
+      change =  0 → Sabit
+
+    2/1 için güçlü sofa pattern: Ev oranı yükseldi (+1) AND Dep oranı düştü (-1)
+    1/2 için güçlü sofa pattern: Dep oranı yükseldi (+1) — piyasa dep'ten çekildi
     """
     signals = []
 
-    # ── Sofa change değerleri ──────────────────────────────────────
-    ft_ch1 = get_sofa_change(sofa_1x2, '1')   # Ev FT change
-    ft_ch2 = get_sofa_change(sofa_1x2, '2')   # Dep FT change
-    ft_chx = get_sofa_change(sofa_1x2, 'X')   # Beraberlik FT change
-    has_sofa = sofa_1x2 is not None
+    # ── Sofa change ve pct değerleri ──────────────────────────────
+    ch1   = get_sofa_change(sofa_1x2, '1')    # Ev change  (-1/0/+1)
+    ch2   = get_sofa_change(sofa_1x2, '2')    # Dep change (-1/0/+1)
+    chx   = get_sofa_change(sofa_1x2, 'X')    # Ber change
+    pct1  = get_sofa_pct(sofa_1x2, '1')       # Ev oran değişimi (%)
+    pct2  = get_sofa_pct(sofa_1x2, '2')       # Dep oran değişimi (%)
+    has_s = sofa_1x2 is not None
 
     # ── Market değerleri ───────────────────────────────────────────
-    ms_home  = get_market(markets, '1x2',     'home')   # MS-1
-    ms_away  = get_market(markets, '1x2',     'away')   # MS-2
-    iy_home  = get_market(markets, 'ht_1x2',  'home')   # İY-1
-    iy_away  = get_market(markets, 'ht_1x2',  'away')   # İY-2
-    sh_home  = get_market(markets, '2h_1x2',  'home')   # 2Y-1
-    sh_away  = get_market(markets, '2h_1x2',  'away')   # 2Y-2
-    iyms_21  = get_market(markets, 'ht_ft',   '2/1')    # İlk Yarı/Maç Son. 2/1
-    iyms_12  = get_market(markets, 'ht_ft',   '1/2')    # İlk Yarı/Maç Son. 1/2
+    ms1      = get_market(markets, '1x2',        'home')   # MS-1
+    ms2      = get_market(markets, '1x2',        'away')   # MS-2
+    iy1      = get_market(markets, 'ht_1x2',     'home')   # İY-1
+    iy2      = get_market(markets, 'ht_1x2',     'away')   # İY-2
+    sy1      = get_market(markets, '2h_1x2',     'home')   # 2Y-1
+    sy2      = get_market(markets, '2h_1x2',     'away')   # 2Y-2
+    iyms21   = get_market(markets, 'ht_ft',      '2/1')    # İlk Y/Maç Son. 2/1
+    iyms12   = get_market(markets, 'ht_ft',      '1/2')    # İlk Y/Maç Son. 1/2
+    dcg_2h   = get_market(markets, 'more_goals', '2h')     # Daha Çok Gol: 2. Yarı
 
-    # "Daha Çok Gol Olacak Yarı" → 2. yarıda daha çok gol bekleniyor
-    # FIX v1: '2h_ou15' değil → 'more_goals' key, '2h' subkey
-    more_goals_2h = get_market(markets, 'more_goals', '2h')
+    # FIX v1: 'ah_m1' → 'ah_p0_1' (Handikap 0:1, ev dezavantajlı)
+    handi01_home = get_market(markets, 'ah_p0_1', 'home')
 
-    # Handikap (0:1) → Ev dezavantajlı
-    # FIX v1: 'ah_m1' değil → 'ah_p0_1'  (h=0 < a=1 → prefix 'p')
-    handi_01_home = get_market(markets, 'ah_p0_1', 'home')
+    # ══════════════════════════════════════════════════════════════
+    # 🟢  2/1 SİNYALLERİ
+    #     (Deplasman İY kazanır → Ev Maç Sonucu kazanır)
+    #     Baz oran: %2.87
+    # ══════════════════════════════════════════════════════════════
 
-    # ══════════════════════════════════════════════════════════════════
-    # 🟢 2/1 SİNYALLERİ — Deplasman İY kazanır → Ev MS kazanır
-    # ══════════════════════════════════════════════════════════════════
+    # ── S1: DCG(2.Y) + İY-2 ≥ 3.5 — sofa ile 2.53x ──────────────
+    if dcg_2h is not None and dcg_2h <= 1.70 and iy2 is not None and iy2 >= 3.5:
+        sofa_tag = ''
+        prec, lift = 4.34, 1.51
+        if has_s and ch1 is not None and ch2 is not None:
+            if ch1 >= 1 and ch2 <= -1:      # En güçlü: Ev↑ + Dep↓
+                sofa_tag = ' + Sofa(Ev↑,Dep↓)'
+                prec, lift = 7.25, 2.53
+            elif ch1 >= 1:
+                sofa_tag = ' + Sofa(Ev↑)'
+                prec, lift = 5.89, 2.05
+            elif ch2 <= -1:
+                sofa_tag = ' + Sofa(Dep↓)'
+                prec, lift = 5.68, 1.98
+        signals.append({
+            'type': '2/1', 'sofa_enhanced': bool(sofa_tag),
+            'rule': f'DCG(2.Y)≤1.7 + İY-2≥3.5{sofa_tag}',
+            'prec': f'%{prec}', 'lift': f'{lift:.2f}x',
+        })
 
-    # ── Sinyal 2/1-S1: IYMS 2/1 oranı düşük + Sofa trend ─────────
-    if iyms_21 is not None:
-        if iyms_21 <= 20.0:
-            base_prec = 4.58
-            base_lift = 1.60
-            sofa_tag  = ''
-
-            # YENİ: ft_ch1=+1 AND ft_ch2=-1 → lift 2.08x (en güçlü pattern)
-            if has_sofa and ft_ch1 is not None and ft_ch2 is not None:
-                if ft_ch1 >= 1 and ft_ch2 <= -1:
-                    sofa_tag  = ' + Sofa(Ev↑Dep↓)'
-                    base_prec = 5.95
-                    base_lift = 2.08
-                elif ft_ch1 >= 1:
-                    sofa_tag  = ' + Sofa(Ev↑)'
-                    base_prec = 5.89
-                    base_lift = 2.05
-                elif ft_ch2 <= -1:
-                    sofa_tag  = ' + Sofa(Dep↓)'
-                    base_prec = 5.68
-                    base_lift = 1.98
-
+    # ── S2: IYMS 2/1 ≤ 20 + opening/closing delta ────────────────
+    if iyms21 is not None:
+        if iyms21 <= 20.0:
+            sofa_tag = ''
+            prec, lift = 4.58, 1.60
+            if has_s:
+                if pct1 is not None and pct2 is not None and pct1 > 5 and pct2 < -5:
+                    sofa_tag = ' + Ev↑%5+Dep↓%5'
+                    prec, lift = 6.83, 2.38
+                elif ch1 is not None and ch2 is not None and ch1 >= 1 and ch2 <= -1:
+                    sofa_tag = ' + Sofa(Ev↑,Dep↓)'
+                    prec, lift = 5.95, 2.08
+                elif ch1 is not None and ch1 >= 1:
+                    sofa_tag = ' + Sofa(Ev↑)'
+                    prec, lift = 5.89, 2.05
             signals.append({
-                'type': '2/1',
+                'type': '2/1', 'sofa_enhanced': bool(sofa_tag),
                 'rule': f'IYMS_2/1 ≤ 20{sofa_tag}',
-                'prec': f'%{base_prec}',
-                'lift': f'{base_lift:.2f}x',
+                'prec': f'%{prec}', 'lift': f'{lift:.2f}x',
             })
-
-        elif iyms_21 <= 25.0:
+        elif iyms21 <= 25.0:
             signals.append({
-                'type': '2/1',
+                'type': '2/1', 'sofa_enhanced': False,
                 'rule': 'IYMS_2/1 ≤ 25',
-                'prec': '%3.82',
-                'lift': '1.33x',
+                'prec': '%3.82', 'lift': '1.33x',
             })
 
-    # ── Sinyal 2/1-S2: 2.Y Gol + İY-2 ≥ 3.5 ─────────────────────
-    if more_goals_2h is not None and more_goals_2h <= 1.70 and iy_away is not None and iy_away >= 3.50:
-        signals.append({
-            'type': '2/1',
-            'rule': '2.Y Gol ≤ 1.7 + İY-2 ≥ 3.5',
-            'prec': '%4.3',
-            'lift': '1.51x',
-        })
-
-    # ── Sinyal 2/1-S3: MS-1 ≤ 2.0 + MS-2 ≥ 4.0 ──────────────────
-    if ms_home is not None and ms_home <= 2.0 and ms_away is not None and ms_away >= 4.0:
-        base_prec = 3.64
-        base_lift = 1.27
-        sofa_tag  = ''
-
-        if has_sofa and ft_ch1 is not None and ft_ch2 is not None:
-            if ft_ch1 >= 1 and ft_ch2 <= -1:
-                sofa_tag  = ' + Sofa(Ev↑Dep↓)'
-                base_prec = 4.82
-                base_lift = 1.68
-            elif ft_ch1 == 0 and ft_ch2 >= 1:
-                sofa_tag  = ' + Sofa(Dep↑)'
-                base_prec = 4.78
-                base_lift = 1.67
-
-        # Alt-kural: İY-2 ≥ 4.0 + 2Y-1 ≤ 2.2 da varsa daha güçlü
-        if iy_away is not None and iy_away >= 4.0 and sh_home is not None and sh_home <= 2.2:
+    # ── S3: MS-1 ≤ 2.0 + MS-2 ≥ 4.0 ─────────────────────────────
+    if ms1 is not None and ms1 <= 2.0 and ms2 is not None and ms2 >= 4.0:
+        sofa_tag = ''
+        prec, lift = 3.64, 1.27
+        if has_s and ch1 is not None and ch2 is not None:
+            if ch1 >= 1 and ch2 <= -1:
+                sofa_tag = ' + Sofa(Ev↑,Dep↓)'
+                prec, lift = 4.82, 1.68
+        # Alt kural: + İY-2≥4.0 + 2Y-1≤2.2
+        if iy2 is not None and iy2 >= 4.0 and sy1 is not None and sy1 <= 2.2:
             signals.append({
-                'type': '2/1',
-                'rule': f'MS-1 ≤ 2.0 + İY-2 ≥ 4.0 + 2Y-1 ≤ 2.2{sofa_tag}',
-                'prec': f'%{max(base_prec, 3.6):.1f}',
-                'lift': f'{max(base_lift, 1.24):.2f}x',
+                'type': '2/1', 'sofa_enhanced': bool(sofa_tag),
+                'rule': f'MS-1≤2.0 + İY-2≥4.0 + 2Y-1≤2.2{sofa_tag}',
+                'prec': f'%{max(prec, 3.6):.1f}', 'lift': f'{max(lift,1.24):.2f}x',
             })
         else:
             signals.append({
-                'type': '2/1',
-                'rule': f'MS-1 ≤ 2.0 + MS-2 ≥ 4.0{sofa_tag}',
-                'prec': f'%{base_prec:.2f}',
-                'lift': f'{base_lift:.2f}x',
+                'type': '2/1', 'sofa_enhanced': bool(sofa_tag),
+                'rule': f'MS-1≤2.0 + MS-2≥4.0{sofa_tag}',
+                'prec': f'%{prec:.2f}', 'lift': f'{lift:.2f}x',
             })
 
-    # ── Sinyal 2/1-S4: 2Y-1 ≤ 2.0 + İY-2 ≥ 3.5 ──────────────────
-    if sh_home is not None and sh_home <= 2.0 and iy_away is not None and iy_away >= 3.5:
+    # ── S4: 2Y-1 ≤ 2.0 + İY-2 ≥ 3.5 ─────────────────────────────
+    if sy1 is not None and sy1 <= 2.0 and iy2 is not None and iy2 >= 3.5:
         signals.append({
-            'type': '2/1',
-            'rule': '2Y-1 ≤ 2.0 + İY-2 ≥ 3.5',
-            'prec': '%3.7',
-            'lift': '1.28x',
+            'type': '2/1', 'sofa_enhanced': False,
+            'rule': '2Y-1≤2.0 + İY-2≥3.5',
+            'prec': '%3.7', 'lift': '1.28x',
         })
 
-    # ── Sinyal 2/1-S5: SS change-1 ≤ -1 + MS-1 ≤ 2.0 ────────────
-    if has_sofa and ft_ch1 is not None and ft_ch1 <= -1 and ms_home is not None and ms_home <= 2.0:
+    # ── S5: SS change-1 ≤ -1 + MS-1 ≤ 2.0 ───────────────────────
+    if has_s and ch1 is not None and ch1 <= -1 and ms1 is not None and ms1 <= 2.0:
         signals.append({
-            'type': '2/1',
-            'rule': 'SS change-1 ≤ -1 + MS-1 ≤ 2.0',
-            'prec': '%3.5',
-            'lift': '1.23x',
+            'type': '2/1', 'sofa_enhanced': True,
+            'rule': 'SS change-1≤-1 + MS-1≤2.0',
+            'prec': '%3.5', 'lift': '1.23x',
         })
 
-    # ── Sinyal 2/1-S6: Han(0:1)_1 ≤ 2.5 + İY-2 ≥ 3.5 ────────────
-    if handi_01_home is not None and handi_01_home <= 2.5 and iy_away is not None and iy_away >= 3.5:
+    # ── S6: Han(0:1)_1 ≤ 2.5 + İY-2 ≥ 3.5 ───────────────────────
+    # FIX v1: key 'ah_p0_1' kullanılıyor
+    if handi01_home is not None and handi01_home <= 2.5 and iy2 is not None and iy2 >= 3.5:
         signals.append({
-            'type': '2/1',
-            'rule': 'Han(0:1)_1 ≤ 2.5 + İY-2 ≥ 3.5',
-            'prec': '%3.9',
-            'lift': '1.36x',
+            'type': '2/1', 'sofa_enhanced': False,
+            'rule': 'Han(0:1)_1≤2.5 + İY-2≥3.5',
+            'prec': '%3.9', 'lift': '1.36x',
         })
 
-    # ══════════════════════════════════════════════════════════════════
-    # 🔵 1/2 SİNYALLERİ — Ev İY kazanır → Deplasman MS kazanır
-    # ══════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════
+    # 🔵  1/2 SİNYALLERİ
+    #     (Ev İY kazanır → Deplasman Maç Sonucu kazanır)
+    #     Baz oran: %2.21
+    # ══════════════════════════════════════════════════════════════
 
-    # ── Sinyal 1/2-S1: MS-2 ≤ 2.0 + MS-1 ≥ 4.0 + Sofa trend ─────
-    if ms_away is not None and ms_away <= 2.0 and ms_home is not None and ms_home >= 4.0:
-        base_prec = 4.26
-        base_lift = 1.92
-        sofa_tag  = ''
+    # ── S1: MS-2 ≤ 2.0 + MS-1 ≥ 4.0 + sofa ─────────────────────
+    if ms2 is not None and ms2 <= 2.0 and ms1 is not None and ms1 >= 4.0:
+        sofa_tag = ''
+        prec, lift = 4.26, 1.92
 
-        if has_sofa and ft_ch2 is not None:
-            if ft_ch2 >= 1:
-                # YENİ: Dep oranı yükselmiş (piyasa uzaklaşmış) → lift 2.37x!
-                sofa_tag  = ' + Sofa(Dep↑)'
-                base_prec = 5.25
-                base_lift = 2.37
-            elif ft_ch2 <= -1:
-                sofa_tag  = ' + Sofa(Dep↓)'
-                base_prec = 4.03
-                base_lift = 1.82
+        if has_s and ch2 is not None:
+            if ch2 >= 1:
+                # En güçlü: Dep oranı yükselmiş (piyasa dep'ten çekildi)
+                if pct1 is not None and pct1 < -2:
+                    sofa_tag = ' + Sofa(Dep↑,Ev↓)'
+                    prec, lift = 5.47, 2.47
+                elif pct2 is not None and pct2 > 2:
+                    sofa_tag = ' + Dep↑%2+'
+                    prec, lift = 5.26, 2.38
+                else:
+                    sofa_tag = ' + Sofa(Dep↑)'
+                    prec, lift = 5.25, 2.37
 
-        # SÜPER KOMB: + 2Y-2 ≤ 2.2 + İY-1 ≥ 3.5
-        if (sh_away is not None and sh_away <= 2.2 and
-                iy_home is not None and iy_home >= 3.5):
+        # SÜPER KOMB: + 2Y-2≤2.2 + İY-1≥3.5 eklenirse daha güçlü
+        if sy2 is not None and sy2 <= 2.2 and iy1 is not None and iy1 >= 3.5:
             signals.append({
-                'type': '1/2',
-                'rule': f'SÜPER: MS-2≤2.0 + MS-1≥4.0 + 2Y-2≤2.2 + İY-1≥3.5{sofa_tag}',
-                'prec': f'%{max(base_prec, 3.9):.1f}',
-                'lift': f'{max(base_lift, 1.77):.2f}x',
+                'type': '1/2', 'sofa_enhanced': bool(sofa_tag),
+                'rule': f'SÜPER: MS-2≤2.0+MS-1≥4.0+2Y-2≤2.2+İY-1≥3.5{sofa_tag}',
+                'prec': f'%{max(prec, 3.9):.1f}', 'lift': f'{max(lift, 1.77):.2f}x',
             })
         else:
             signals.append({
-                'type': '1/2',
-                'rule': f'MS-2 ≤ 2.0 + MS-1 ≥ 4.0{sofa_tag}',
-                'prec': f'%{base_prec:.2f}',
-                'lift': f'{base_lift:.2f}x',
+                'type': '1/2', 'sofa_enhanced': bool(sofa_tag),
+                'rule': f'MS-2≤2.0 + MS-1≥4.0{sofa_tag}',
+                'prec': f'%{prec:.2f}', 'lift': f'{lift:.2f}x',
             })
 
-    # ── Sinyal 1/2-S2: MS-2 ≤ 2.5 + MS-1 ≥ 4.5 ──────────────────
-    if ms_away is not None and ms_away <= 2.5 and ms_home is not None and ms_home >= 4.5:
+    # ── S2: DCG(2.Y) + İY-1 ≥ 3.5 ───────────────────────────────
+    # FIX v1: 'more_goals'/'2h' key kullanılıyor
+    if dcg_2h is not None and dcg_2h <= 1.70 and iy1 is not None and iy1 >= 3.5:
         signals.append({
-            'type': '1/2',
-            'rule': 'MS-2 ≤ 2.5 + MS-1 ≥ 4.5',
-            'prec': '%4.1',
-            'lift': '1.83x',
+            'type': '1/2', 'sofa_enhanced': False,
+            'rule': 'DCG(2.Y)≤1.7 + İY-1≥3.5',
+            'prec': '%4.75', 'lift': '2.15x',
         })
 
-    # ── Sinyal 1/2-S3: 2Y-2 ≤ 2.0 + İY-1 ≥ 3.5 + Sofa ──────────
-    if sh_away is not None and sh_away <= 2.0 and iy_home is not None and iy_home >= 3.5:
-        base_prec = 4.06
-        base_lift = 1.84
-        sofa_tag  = ''
-        if has_sofa and ft_ch2 is not None and ft_ch2 >= 1:
-            sofa_tag  = ' + Sofa(Dep↑)'
-            base_prec = 4.66
-            base_lift = 2.11
+    # ── S3: MS-2 ≤ 2.5 + MS-1 ≥ 4.5 ─────────────────────────────
+    if ms2 is not None and ms2 <= 2.5 and ms1 is not None and ms1 >= 4.5:
         signals.append({
-            'type': '1/2',
-            'rule': f'2Y-2 ≤ 2.0 + İY-1 ≥ 3.5{sofa_tag}',
-            'prec': f'%{base_prec:.2f}',
-            'lift': f'{base_lift:.2f}x',
+            'type': '1/2', 'sofa_enhanced': False,
+            'rule': 'MS-2≤2.5 + MS-1≥4.5',
+            'prec': '%4.1', 'lift': '1.83x',
         })
 
-    # ── Sinyal 1/2-S4: 2.Y Gol + İY-1 ≥ 3.5 ─────────────────────
-    if more_goals_2h is not None and more_goals_2h <= 1.70 and iy_home is not None and iy_home >= 3.5:
+    # ── S4: 2Y-2 ≤ 2.0 + İY-1 ≥ 3.5 + sofa ─────────────────────
+    if sy2 is not None and sy2 <= 2.0 and iy1 is not None and iy1 >= 3.5:
+        sofa_tag = ''
+        prec, lift = 4.06, 1.84
+        if has_s and ch2 is not None and ch2 >= 1:
+            sofa_tag = ' + Sofa(Dep↑)'
+            prec, lift = 4.66, 2.11
         signals.append({
-            'type': '1/2',
-            'rule': '2.Y Gol ≤ 1.7 + İY-1 ≥ 3.5',
-            'prec': '%4.8',
-            'lift': '2.15x',
+            'type': '1/2', 'sofa_enhanced': bool(sofa_tag),
+            'rule': f'2Y-2≤2.0 + İY-1≥3.5{sofa_tag}',
+            'prec': f'%{prec:.2f}', 'lift': f'{lift:.2f}x',
         })
 
-    # ── Sinyal 1/2-S5: MS-1 ≥ 4.0 + 2Y-2 ≤ 2.5 + İY-1 ≥ 3.5 ────
-    if (ms_home is not None and ms_home >= 4.0 and
-            sh_away is not None and sh_away <= 2.5 and
-            iy_home is not None and iy_home >= 3.5):
+    # ── S5: İY-1 ≥ 3.5 + MS-2 ≤ 2.0 + Sofa(Ev↓, Dep=0) ─────────
+    if (iy1 is not None and iy1 >= 3.5 and ms2 is not None and ms2 <= 2.0 and
+            has_s and ch1 is not None and ch2 is not None and ch1 == -1 and ch2 == 0):
         signals.append({
-            'type': '1/2',
-            'rule': 'MS-1 ≥ 4.0 + 2Y-2 ≤ 2.5 + İY-1 ≥ 3.5',
-            'prec': '%4.1',
-            'lift': '1.87x',
+            'type': '1/2', 'sofa_enhanced': True,
+            'rule': 'İY-1≥3.5 + MS-2≤2.0 + Sofa(Ev↓,Dep=0)',
+            'prec': '%5.11', 'lift': '2.31x',
         })
 
-    # ── Sinyal 1/2-S6: IYMS 1/2 ≤ 20 + Sofa ─────────────────────
-    if iyms_12 is not None and iyms_12 <= 20.0:
-        base_prec = 4.06
-        base_lift = 1.83
-        sofa_tag  = ''
-        if has_sofa and ft_ch2 is not None:
-            if ft_ch2 <= -1:
-                sofa_tag  = ' + Sofa(Dep↓)'
-                base_prec = 4.65
-                base_lift = 2.10
-            elif ft_ch1 is not None and ft_ch1 >= 1:
-                sofa_tag  = ' + Sofa(Ev↑)'
-                base_prec = 4.49
-                base_lift = 2.03
+    # ── S6: MS-1 ≥ 4.0 + 2Y-2 ≤ 2.5 + İY-1 ≥ 3.5 ───────────────
+    if (ms1 is not None and ms1 >= 4.0 and
+            sy2 is not None and sy2 <= 2.5 and
+            iy1 is not None and iy1 >= 3.5):
         signals.append({
-            'type': '1/2',
+            'type': '1/2', 'sofa_enhanced': False,
+            'rule': 'MS-1≥4.0 + 2Y-2≤2.5 + İY-1≥3.5',
+            'prec': '%4.1', 'lift': '1.87x',
+        })
+
+    # ── S7: IYMS 1/2 ≤ 20 + sofa ─────────────────────────────────
+    if iyms12 is not None and iyms12 <= 20.0:
+        sofa_tag = ''
+        prec, lift = 4.06, 1.83
+        if has_s and ch1 is not None and ch2 is not None:
+            if ch1 >= 1 and ch2 <= -1:
+                sofa_tag = ' + Sofa(Ev↑,Dep↓)'
+                prec, lift = 4.77, 2.16
+            elif ch1 >= 1:
+                sofa_tag = ' + Sofa(Ev↑)'
+                prec, lift = 4.49, 2.03
+        signals.append({
+            'type': '1/2', 'sofa_enhanced': bool(sofa_tag),
             'rule': f'IYMS_1/2 ≤ 20{sofa_tag}',
-            'prec': f'%{base_prec:.2f}',
-            'lift': f'{base_lift:.2f}x',
+            'prec': f'%{prec:.2f}', 'lift': f'{lift:.2f}x',
         })
 
-    # ── Sinyal 1/2-S7: SS change-2 ≤ -1 + MS-2 ≤ 2.0 ────────────
-    if has_sofa and ft_ch2 is not None and ft_ch2 <= -1 and ms_away is not None and ms_away <= 2.0:
+    # ── S8: SS change-2 ≤ -1 + MS-2 ≤ 2.0 ───────────────────────
+    if has_s and ch2 is not None and ch2 <= -1 and ms2 is not None and ms2 <= 2.0:
         signals.append({
-            'type': '1/2',
-            'rule': 'SS change-2 ≤ -1 + MS-2 ≤ 2.0',
-            'prec': '%3.8',
-            'lift': '1.71x',
+            'type': '1/2', 'sofa_enhanced': True,
+            'rule': 'SS change-2≤-1 + MS-2≤2.0',
+            'prec': '%3.8', 'lift': '1.71x',
         })
 
     return signals
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 4. ANA ÇALIŞTIRMA FONKSİYONU
+# 4. ANA FONKSİYON
 # ─────────────────────────────────────────────────────────────────────
 
 def generate_signals():
-    # match_odds tablosunu çek
     try:
         response = (
             supabase.table('match_odds')
@@ -406,8 +415,8 @@ def generate_signals():
     except Exception:
         response = supabase.table('match_odds').select('*').execute()
 
-    rows     = response.data
-    now_tr   = datetime.utcnow() + timedelta(hours=3)
+    rows   = response.data
+    now_tr = datetime.utcnow() + timedelta(hours=3)
 
     skipped_past    = 0
     skipped_no_odds = 0
@@ -429,7 +438,7 @@ def generate_signals():
 
         row['_parsed_odds'] = odds_data
         markets  = odds_data.get('markets', {})
-        sofa_1x2 = odds_data.get('sofa_1x2')   # {'1':{change:-1},'X':{change:0},'2':{change:1}}
+        sofa_1x2 = odds_data.get('sofa_1x2')
 
         if not markets:
             skipped_no_odds += 1
@@ -454,11 +463,13 @@ def generate_signals():
         if sigs:
             sigs.sort(key=lambda s: float(s['lift'].replace('x', '')), reverse=True)
             signals_found.append({
-                'fixture_id': row.get('fixture_id'),
-                'match':      match_name,
-                'date':       match_date_str,
-                'signals':    sigs,
-                'top_lift':   sigs[0]['lift'],
+                'fixture_id':    row.get('fixture_id'),
+                'match':         match_name,
+                'date':          match_date_str,
+                'signals':       sigs,
+                'top_lift':      sigs[0]['lift'],
+                'has_sofa':      sofa_1x2 is not None,
+                'best_is_sofa':  sigs[0].get('sofa_enhanced', False),
             })
 
     signals_found.sort(key=lambda m: float(m['top_lift'].replace('x', '')), reverse=True)
@@ -467,10 +478,12 @@ def generate_signals():
     print("=" * 72)
     print(f"  ScorePop REVERSAL v2  |  {now_tr.strftime('%Y-%m-%d %H:%M')} TR")
     print("=" * 72)
-    print(f"  Toplam taranan satır : {len(rows)}")
-    print(f"  Geçmiş maç (atlanan) : {skipped_past}")
-    print(f"  Oran yok (atlanan)   : {skipped_no_odds}")
-    print(f"  Sinyal bulunan maç   : {len(signals_found)}")
+    print(f"  Taranan satır    : {len(rows)}")
+    print(f"  Geçmiş maç atla  : {skipped_past}")
+    print(f"  Oran yok atla    : {skipped_no_odds}")
+    print(f"  Sinyal bulunan   : {len(signals_found)}")
+    sofa_count = sum(1 for m in signals_found if m['has_sofa'])
+    print(f"  Sofa verisi olan : {sofa_count}")
     print("=" * 72)
 
     if not signals_found:
@@ -478,15 +491,17 @@ def generate_signals():
         return
 
     for m in signals_found:
-        has_strong = any(float(s['lift'].replace('x','')) >= 2.0 for s in m['signals'])
-        prefix = "🔥" if has_strong else "  "
-        print(f"\n{prefix} {m['date']}  |  {m['match']}")
+        top_lift  = float(m['top_lift'].replace('x',''))
+        fire_icon = "🔥" if top_lift >= 2.3 else ("⚡" if top_lift >= 2.0 else "  ")
+        sofa_note = " [SOFA ✓]" if m['has_sofa'] else ""
+        print(f"\n{fire_icon} {m['date']}  |  {m['match']}{sofa_note}")
         print(f"  {'─' * 68}")
         for s in m['signals']:
             lift_val = float(s['lift'].replace('x',''))
-            color_icon = "🟢" if s['type'] == '2/1' else "🔵"
-            star = " ⭐" if lift_val >= 2.0 else ""
-            print(f"  {color_icon} {s['type']} | Lift: {s['lift']}{star} | Başarı: {s['prec']}")
+            icon = "🟢" if s['type'] == '2/1' else "🔵"
+            stars = " ⭐⭐" if lift_val >= 2.3 else (" ⭐" if lift_val >= 2.0 else "")
+            sofa_flag = " 〔SOFA〕" if s.get('sofa_enhanced') else ""
+            print(f"  {icon} {s['type']} | Lift: {s['lift']}{stars} | Başarı: {s['prec']}{sofa_flag}")
             print(f"     Filtre: {s['rule']}")
         print()
 
