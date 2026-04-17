@@ -112,7 +112,20 @@ def change_dir(val: float | None) -> int | None:
 
 
 def parse_match_datetime(row: dict) -> datetime | None:
-    """Maç tarih/saatini birden fazla kaynaktan arar."""
+    """Maç tarih/saatini birden fazla kaynaktan arar. Öncelik future_matches tablosudur."""
+    
+    # 1. YENİ YÖNTEM: future_matches içindeki date kolonunu kontrol et
+    future_match_data = row.get('future_matches')
+    if future_match_data and isinstance(future_match_data, dict):
+        iso_date = future_match_data.get('date')
+        if iso_date:
+            try:
+                # ISO formatını (YYYY-MM-DDTHH:MM:SS) direkt parse eder
+                return datetime.fromisoformat(iso_date.replace('Z', '+00:00'))
+            except ValueError:
+                pass
+                
+    # 2. ESKİ YÖNTEM (Geriye dönük uyumluluk / matches join'i kalmışsa)
     matches_join = row.get('matches')
     if matches_join and isinstance(matches_join, dict):
         m_date = matches_join.get('match_date', '')
@@ -121,6 +134,8 @@ def parse_match_datetime(row: dict) -> datetime | None:
             return datetime.strptime(f"{m_date} {m_time[:5]}", "%Y-%m-%d %H:%M")
         except ValueError:
             pass
+
+    # 3. KÖK DİZİN (Eğer row içine doğrudan yazılmışsa)
     if row.get('match_date'):
         m_date = row.get('match_date', '')
         m_time = (row.get('match_time', '00:00') or '00:00')[:5]
@@ -128,6 +143,8 @@ def parse_match_datetime(row: dict) -> datetime | None:
             return datetime.strptime(f"{m_date} {m_time}", "%Y-%m-%d %H:%M")
         except ValueError:
             pass
+
+    # 4. ODDS DATA (Eğer sadece odds_data içindeyse)
     odds_data = row.get('_parsed_odds', {})
     if odds_data.get('match_date'):
         m_date = odds_data['match_date']
@@ -136,6 +153,8 @@ def parse_match_datetime(row: dict) -> datetime | None:
             return datetime.strptime(f"{m_date} {m_time}", "%Y-%m-%d %H:%M")
         except ValueError:
             pass
+
+    # Hiçbir yerde bulamazsa
     return None
 
 
@@ -412,7 +431,7 @@ def generate_signals():
     try:
         response = (
             supabase.table('match_odds')
-            .select('*, matches(match_date, match_time)')
+            .select('*, future_matches(date)')
             .execute()
         )
     except Exception:
