@@ -112,20 +112,16 @@ def change_dir(val: float | None) -> int | None:
 
 
 def parse_match_datetime(row: dict) -> datetime | None:
-    """Maç tarih/saatini birden fazla kaynaktan arar. Öncelik future_matches tablosudur."""
-    
-    # 1. YENİ YÖNTEM: future_matches içindeki date kolonunu kontrol et
-    future_match_data = row.get('future_matches')
-    if future_match_data and isinstance(future_match_data, dict):
-        iso_date = future_match_data.get('date')
-        if iso_date:
-            try:
-                # ISO formatını (YYYY-MM-DDTHH:MM:SS) direkt parse eder
-                return datetime.fromisoformat(iso_date.replace('Z', '+00:00'))
-            except ValueError:
-                pass
-                
-    # 2. ESKİ YÖNTEM (Geriye dönük uyumluluk / matches join'i kalmışsa)
+    # 1. DOĞRUDAN MATCH_ODDS TABLOSUNDAKİ 'date' KOLONUNU OKU
+    raw_date = row.get('date')
+    if raw_date:
+        try:
+            # Gelen veriyi (örneğin '2026-04-17T12:35:00') saate çevir
+            return datetime.fromisoformat(str(raw_date).replace('Z', '+00:00'))
+        except ValueError:
+            pass
+            
+    # 2. ESKİ YÖNTEM (Eğer 'date' boş gelirse match_date vs. baksın)
     matches_join = row.get('matches')
     if matches_join and isinstance(matches_join, dict):
         m_date = matches_join.get('match_date', '')
@@ -135,7 +131,6 @@ def parse_match_datetime(row: dict) -> datetime | None:
         except ValueError:
             pass
 
-    # 3. KÖK DİZİN (Eğer row içine doğrudan yazılmışsa)
     if row.get('match_date'):
         m_date = row.get('match_date', '')
         m_time = (row.get('match_time', '00:00') or '00:00')[:5]
@@ -144,7 +139,6 @@ def parse_match_datetime(row: dict) -> datetime | None:
         except ValueError:
             pass
 
-    # 4. ODDS DATA (Eğer sadece odds_data içindeyse)
     odds_data = row.get('_parsed_odds', {})
     if odds_data.get('match_date'):
         m_date = odds_data['match_date']
@@ -154,7 +148,6 @@ def parse_match_datetime(row: dict) -> datetime | None:
         except ValueError:
             pass
 
-    # Hiçbir yerde bulamazsa
     return None
 
 
@@ -428,18 +421,12 @@ def evaluate_reversal_signals(markets: dict, mc_1x2: dict | None) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────
 
 def generate_signals():
-    try:
-        response = (
-            supabase.table('match_odds')
-            .select('*, future_matches(date)')
-            .execute()
-        )
-    except Exception:
-      print(f"\n!!! SUPABASE SORGUSU PATLADI !!! Hata: {e}\n")
-        response = supabase.table('match_odds').select('*').execute()
+    # Hata çıkaran future_matches sorgusunu tamamen sildik, dümdüz veriyi çekiyoruz
+    response = supabase.table('match_odds').select('*').execute()
 
     rows   = response.data
     now_tr = datetime.utcnow() + timedelta(hours=3)
+    
 
     skipped_past    = 0
     skipped_no_odds = 0
