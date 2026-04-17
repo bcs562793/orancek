@@ -78,13 +78,13 @@ def get_sofa_change(sofa_1x2, side):
     return int(entry['change'])
 
 def parse_match_datetime(row):
-    for src in [row.get('matches'), row, row.get('_parsed_odds', {})]:
-        if not src or not isinstance(src, dict): continue
-        m_date = src.get('match_date', '')
-        m_time = (src.get('match_time', '00:00') or '00:00')[:5]
-        if m_date:
-            try: return datetime.strptime(f"{m_date} {m_time}", "%Y-%m-%d %H:%M")
-            except: pass
+    # 1. Önce doğrudan 'date' kolonuna bak (v3 yöntemi)
+    raw_date = row.get('date')
+    if raw_date:
+        try:
+            return datetime.fromisoformat(str(raw_date).replace('Z', '+00:00'))
+        except ValueError:
+            pass
     return None
 
 # ─────────────────────────────────────────────────────────────────────
