@@ -1,10 +1,33 @@
 """
-reversal_signals.py v5 — FT Grup Saflık Filtresi + 1/1 / 2/2 Sinyalleri
-=========================================================================
+reversal_signals.py v6 — Post-Mortem Düzeltmeleri
+===================================================
 
-Tablo yapısı: fixture_id | odds_data | updated_at
-  - Tarih kolonu YOK → tarih filtresi tamamen kaldırıldı
-  - Sorgu: supabase.table('match_odds').select('*').execute()
+v6 POST-MORTEM BULGULARI (Fenerbahçe ⚠ / Inter ⚠ / Blackburn ⚠ / Sassuolo ⚠):
+
+  FENERBAHÇE & INTER (ELITE 2/1 yanlış, X/X ve 1/1 bitti):
+    Sorun: ch_ms1=+1 → Piyasa ev oranını yükseltti (evden kaçıyor)
+           EV_FT=+1 → Ev FT grubu net negatif değil
+           ch_iyms21=-1 var ama gerçek divergence yok — piyasa dep'i destekliyor
+    Fix:   Lens FP + ch_iyms21=-1 kombinasyonu için ch_ms1 <= 0 ZORUNLU
+           (ev MS oranı düşmüyorsa 2/1 ELITE verilmez)
+
+  BLACKBURN & SASSUOLO (PREMIER 2/2 yanlış, X/X ve 1/1 bitti):
+    Sorun: ch_iyms12=-1 VE ch_iyms22=-1 birlikte → genel dep hareketi
+           1/2 ve 2/2 ikisi birden düşüyor → spesifik 2/2 değil, genel "dep MS alır"
+           EV_FT=+2 → ev FT grubu net pozitif → ev sürprizi riski
+    Fix:   2/2 için ch_iyms12 != -1 (1/2 ile birlikte düşmemeli = spesifik 2/2)
+           2/2 için ev_ft_sum <= 0 (ev FT grubu yükseliyorsa iptal)
+           2/2 için ms1 < 4.5 (büyük underdog ev'de upset riski yüksek → iptal)
+
+  MELBOURNE (2/1 sinyali fazladan, 1/1 tuttu ✅):
+    Sorun: EV_FT=-3, DEP_FT=+3 → Tüm ev FT grubu düşüyor → Bu 2/1 değil, 1/1 pattern
+           2/1 sinyali vermeye gerek yok, zaten 1/1 daha güçlü
+    Fix:   dep_ft_sum >= 3 iken IYMS 2/1 sinyali → vermez (zaten 1/1 sinyali verilir)
+
+v6 YENİLİKLERİ:
+  1. 2/1 ELITE ch_ms1 GUARD: Lens FP + divergence için ch_ms1 <= 0 zorunlu
+  2. 2/2 SPESİFİKLİK FİLTRESİ: ch_iyms12 != -1 + ev_ft_sum <= 0 + ms1 < 4.5
+  3. 2/1 DEP_FT=+3 SUSTURMA: dep_ft_sum >= 3 iken IYMS 2/1 sinyali verilmez
 """
 
 import os, json
@@ -32,12 +55,6 @@ def get_market(markets, key, subkey):
     return safe_float(markets.get(key, {}).get(subkey))
 
 def get_change(changes, key, subkey):
-    """
-    markets_change dict'inden change okur.
-      -1 = oran düştü (piyasa bu sonucu daha olası gördü)
-       0 = sabit
-      +1 = oran yükseldi (piyasa bu sonuçtan uzaklaştı)
-    """
     if not changes: return None
     val = changes.get(key, {}).get(subkey)
     if val is None: return None
@@ -56,7 +73,6 @@ def get_sofa_change(sofa_1x2, side):
 
 def ft_group_sums(changes):
     """
-    9 IYMS outcome'u 3 FT kazanan grubuna toplar.
     EV FT  : 1/1 + 2/1 + X/1
     DEP FT : 1/2 + 2/2 + X/2
     BERA FT: 1/X + 2/X + X/X
@@ -68,7 +84,7 @@ def ft_group_sums(changes):
     return ev_ft, dep_ft, bera
 
 # ─────────────────────────────────────────────────────────────────────
-# SINYAL MOTORU v5
+# SINYAL MOTORU v6
 # ─────────────────────────────────────────────────────────────────────
 
 def evaluate_reversal_signals(markets, changes, sofa_1x2):
@@ -77,18 +93,18 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
     sofa_ch1 = get_sofa_change(sofa_1x2, '1')
     sofa_ch2 = get_sofa_change(sofa_1x2, '2')
 
-    ch_ms1    = get_change(changes, '1x2',        'home')
-    ch_ms2    = get_change(changes, '1x2',        'away')
-    ch_iy1    = get_change(changes, 'ht_1x2',     'home')
-    ch_iy2    = get_change(changes, 'ht_1x2',     'away')
-    ch_sy1    = get_change(changes, '2h_1x2',     'home')
-    ch_sy2    = get_change(changes, '2h_1x2',     'away')
-    ch_iyms21 = get_change(changes, 'ht_ft',      '2/1')
-    ch_iyms12 = get_change(changes, 'ht_ft',      '1/2')
-    ch_iyms11 = get_change(changes, 'ht_ft',      '1/1')
-    ch_iyms22 = get_change(changes, 'ht_ft',      '2/2')
-    ch_iymsx1 = get_change(changes, 'ht_ft',      'X/1')
-    ch_iymsx2 = get_change(changes, 'ht_ft',      'X/2')
+    ch_ms1    = get_change(changes, '1x2',    'home')
+    ch_ms2    = get_change(changes, '1x2',    'away')
+    ch_iy1    = get_change(changes, 'ht_1x2', 'home')
+    ch_iy2    = get_change(changes, 'ht_1x2', 'away')
+    ch_sy1    = get_change(changes, '2h_1x2', 'home')
+    ch_sy2    = get_change(changes, '2h_1x2', 'away')
+    ch_iyms21 = get_change(changes, 'ht_ft',  '2/1')
+    ch_iyms12 = get_change(changes, 'ht_ft',  '1/2')
+    ch_iyms11 = get_change(changes, 'ht_ft',  '1/1')
+    ch_iyms22 = get_change(changes, 'ht_ft',  '2/2')
+    ch_iymsx1 = get_change(changes, 'ht_ft',  'X/1')
+    ch_iymsx2 = get_change(changes, 'ht_ft',  'X/2')
     ch_dcg_2h = get_change(changes, 'more_goals_half', 'second')
 
     has_change = changes is not None and len(changes) > 0
@@ -97,15 +113,36 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
     if has_change:
         ev_ft_sum, dep_ft_sum, bera_ft_sum = ft_group_sums(changes)
 
+    # Temiz ev reversal: ev FT grubu düşüyor, dep FT grubu yükseliyor
     is_clean_ev_reversal = has_change and ev_ft_sum <= -2 and dep_ft_sum >= 1
-    is_dep_dominance     = has_change and dep_ft_sum <= -3
-    is_ev_dominance      = has_change and ev_ft_sum <= -2 and dep_ft_sum >= 2
 
-    is_pure_12_reversal  = (has_change and
-                            ch_iyms12 == -1 and
-                            (ch_iyms22 is None or ch_iyms22 >= 0) and
-                            (ch_iy1 is None or ch_iy1 <= 0))
+    # ─── v6 FIX 3: Dep FT çok güçlü yükseliyorsa 2/1 değil 1/1 ───
+    # dep_ft_sum >= 3 → tüm dep FT yükseliyor → bu 2/1 değil 1/1 pattern
+    is_strong_ev_dominance = has_change and ev_ft_sum <= -3 and dep_ft_sum >= 3
 
+    # Genel dep dominance (2/2 için)
+    is_dep_dominance = has_change and dep_ft_sum <= -3
+
+    # 1/1 ev hakimiyeti
+    is_ev_dominance = has_change and ev_ft_sum <= -2 and dep_ft_sum >= 2
+
+    # 1/2 saflık filtresi (v5'ten korunuyor)
+    is_pure_12_reversal = (has_change and
+                           ch_iyms12 == -1 and
+                           (ch_iyms22 is None or ch_iyms22 >= 0) and
+                           (ch_iy1 is None or ch_iy1 <= 0))
+
+    # ─── v6 YENİ: 2/2 saflık filtresi ───────────────────────────────
+    # 2/2 spesifik: ch_iyms22=-1 VE ch_iyms12 != -1 (1/2 ile birlikte düşmüyor)
+    # + ev FT grubu yükselmiyor (ev sürprizi engeli)
+    # + ms1 < 4.5 (büyük underdog ev'de upset riski)
+    is_specific_22 = (has_change and
+                      ch_iyms22 == -1 and
+                      (ch_iyms12 is None or ch_iyms12 != -1) and
+                      ev_ft_sum <= 0 and
+                      True)  # ms1 kontrolü aşağıda oran verisiyle yapılır
+
+    # Market oranları
     ms1    = get_market(markets, '1x2',        'home')
     ms2    = get_market(markets, '1x2',        'away')
     iy1    = get_market(markets, 'ht_1x2',     'home')
@@ -141,13 +178,17 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
             sig('2/1', 'Lens FP + DCG(2.Y)≤1.9', 4.26, 1.49)
 
         if has_change and ch_iyms21 == -1:
-            if is_clean_ev_reversal and dep_ft_sum >= 1:
+            # ─── v6 FIX 1: ch_ms1 <= 0 GUARD ─────────────────────────
+            # Ev MS oranı yükseliyorsa (piyasa ev'den kaçıyor) 2/1 ELITE vermez
+            if ch_ms1 is not None and ch_ms1 > 0:
+                pass  # Fenerbahçe/Inter pattern → iptal
+            elif is_clean_ev_reversal and dep_ft_sum >= 1:
                 sig('2/1',
-                    'ELITE v5: Lens FP + IYMS_2/1↓ + EV FT GRUBU TEMİZ',
+                    'ELITE v6: Lens FP + IYMS_2/1↓ + EV FT TEMİZ + ch_ms1≤0',
                     8.0, 2.80, tier='ELITE')
             else:
                 sig('2/1',
-                    'ELITE: Lens FP + IYMS_2/1 oranı DÜŞTÜ (divergence)',
+                    'ELITE: Lens FP + IYMS_2/1↓ (divergence) + ch_ms1≤0',
                     7.0, 2.44, tier='ELITE')
 
         if sofa_ch1 == -1 and sofa_ch2 == 1:
@@ -157,25 +198,32 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
             sig('2/1', 'Lens FP + Ev tüm markette favori oldu', 4.6, 1.60)
 
         if has_change and ch_iyms21 == -1 and sofa_ch1 == -1:
-            sig('2/1', 'ELITE: Lens FP + IYMS↓ + Sofa(Ev↓)',
-                7.5, 2.61, tier='ELITE')
+            if ch_ms1 is None or ch_ms1 <= 0:  # v6 guard
+                sig('2/1', 'ELITE: Lens FP + IYMS↓ + Sofa(Ev↓)',
+                    7.5, 2.61, tier='ELITE')
 
+    # IYMS 2/1 ≤ 20
     if iyms21 and iyms21 <= 20:
-        prec, lift = 4.58, 1.60
-        sofa_tag = ''
-        if has_change and ch_iyms21 == -1:
-            prec, lift = 6.5, 2.27
-            sofa_tag = ' + IYMS oranı düştü'
-            if is_clean_ev_reversal:
-                prec, lift = 7.0, 2.44
-                sofa_tag = ' + IYMS↓ + EV FT TEMİZ'
-        elif sofa_ch1 == -1 and sofa_ch2 == 1:
-            prec, lift = 5.95, 2.08
-            sofa_tag = ' + Sofa(Ev↓+Dep↑)'
-        elif sofa_ch1 == -1:
-            prec, lift = 5.89, 2.05
-            sofa_tag = ' + Sofa(Ev↓)'
-        sig('2/1', f'IYMS_2/1≤20{sofa_tag}', prec, lift)
+        # ─── v6 FIX 3: dep_ft_sum >= 3 ise 2/1 vermez ─────────────
+        # Bu maçlar 1/1 pattern'ı, ayrıca is_ev_dominance sinyali verecek
+        if is_strong_ev_dominance:
+            pass  # 2/1 değil, 1/1 sinyallerine bırak
+        else:
+            prec, lift = 4.58, 1.60
+            sofa_tag = ''
+            if has_change and ch_iyms21 == -1:
+                prec, lift = 6.5, 2.27
+                sofa_tag = ' + IYMS↓'
+                if is_clean_ev_reversal:
+                    prec, lift = 7.0, 2.44
+                    sofa_tag = ' + IYMS↓ + EV FT TEMİZ'
+            elif sofa_ch1 == -1 and sofa_ch2 == 1:
+                prec, lift = 5.95, 2.08
+                sofa_tag = ' + Sofa(Ev↓+Dep↑)'
+            elif sofa_ch1 == -1:
+                prec, lift = 5.89, 2.05
+                sofa_tag = ' + Sofa(Ev↓)'
+            sig('2/1', f'IYMS_2/1≤20{sofa_tag}', prec, lift)
 
     elif iyms21 and iyms21 <= 25:
         sig('2/1', 'IYMS_2/1≤25', 3.82, 1.33)
@@ -208,7 +256,7 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
 
     if iyms12 and iyms12 <= 25 and is_pure_12_reversal:
         sig('1/2',
-            'ELITE v5: IYMS_1/2≤25 + PURE reversal (ch22≥0, IY ev≤0)',
+            'ELITE v6: IYMS_1/2≤25 + PURE reversal (ch22≥0, IY ev≤0)',
             7.2, 2.50, tier='ELITE')
     elif iyms12 and iyms12 <= 25 and has_change and ch_iyms12 == -1:
         reasons = []
@@ -263,7 +311,7 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
         sig('1/2', 'MS-2≤2.5 + MS-1≥4.5', 4.1, 1.83)
 
     # ══════════════════════════════════════════════════════════════════
-    # YENİ v5: 1/1 EV HAKİMİYETİ SİNYALİ
+    # 1/1 EV HAKİMİYETİ SİNYALİ
     # ══════════════════════════════════════════════════════════════════
 
     if is_ev_dominance and has_change:
@@ -271,11 +319,11 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
         if iy1_ok:
             if ms1 and ms1 <= 2.5:
                 sig('1/1',
-                    'v5 YENİ: 1/1 Ev Hakimiyeti — ev FT grubu temiz↓ + dep FT↑',
+                    'v6: 1/1 Ev Hakimiyeti — ev FT grubu temiz↓ + dep FT↑',
                     5.5, 1.92, tier='PREMIER')
             elif ms1 and ms1 <= 4.0:
                 sig('1/1',
-                    'v5 YENİ: 1/1 Ev Sürprizi — underdog ev FT grubu↓ + dep FT↑',
+                    'v6: 1/1 Ev Sürprizi — underdog ev FT grubu↓ + dep FT↑',
                     4.8, 1.67, tier='STANDART')
 
         if (iy1_ok and
@@ -283,23 +331,37 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
                 ch_ms1 is not None and ch_ms1 <= 0):
             if ms1 and ms1 <= 3.5:
                 sig('1/1',
-                    'v5 YENİ: 1/1 TAM HAKİMİYET — IY+2Y+MS+IYMS hepsi ev↓',
+                    'v6: 1/1 TAM HAKİMİYET — IY+2Y+MS+IYMS hepsi ev↓',
                     6.2, 2.17, tier='PREMIER')
 
     # ══════════════════════════════════════════════════════════════════
-    # YENİ v5: 2/2 DEP HAKİMİYETİ SİNYALİ
+    # 2/2 DEP HAKİMİYETİ SİNYALİ — v6 SPESİFİKLİK FİLTRELİ
     # ══════════════════════════════════════════════════════════════════
+    #
+    # v6 FIX 2: ch_iyms12 != -1 (1/2 ile birlikte düşmemeli)
+    #           ev_ft_sum <= 0 (ev FT grubu yükseliyorsa iptal)
+    #           ms1 < 4.5 (büyük underdog ev → upset riski)
+    #
+    # Blackburn (EV_FT=+2, ch12=-1 ve ch22=-1 birlikte) → GEÇMEZ
+    # Sassuolo  (EV_FT=+2, ch12=-1 ve ch22=-1 birlikte) → GEÇMEZ
 
-    if is_dep_dominance and has_change:
+    is_dep_dominance_v6 = (
+        is_dep_dominance and
+        (ch_iyms12 is None or ch_iyms12 != -1) and   # 1/2 ile birlikte düşmemeli
+        ev_ft_sum <= 0 and                             # ev FT yükseliyorsa iptal
+        (ms1 is None or ms1 < 4.5)                    # büyük underdog ev riski
+    )
+
+    if is_dep_dominance_v6:
         iy2_ok = (ch_iy2 is not None and ch_iy2 <= 0)
         if iy2_ok:
             if ms2 and ms2 <= 1.8:
                 sig('2/2',
-                    'v5 YENİ: 2/2 Dep Hakimiyeti — tüm dep FT grubu↓ (dep≤1.8)',
+                    'v6: 2/2 Dep Hakimiyeti SPESİFİK — dep FT↓ (ch12≠-1, ev_ft≤0)',
                     5.8, 2.03, tier='PREMIER')
             elif ms2 and ms2 <= 2.5:
                 sig('2/2',
-                    'v5 YENİ: 2/2 Dep Hakimiyeti (orta) — dep FT grubu tam↓',
+                    'v6: 2/2 Dep Hakimiyeti (orta) — dep FT tam↓, spesifik',
                     4.6, 1.61, tier='STANDART')
 
         if (iy2_ok and
@@ -307,7 +369,7 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
                 ch_ms2 is not None and ch_ms2 <= 0):
             if ms2 and ms2 <= 2.0:
                 sig('2/2',
-                    'v5 YENİ: 2/2 TAM DEP HAKİMİYETİ — IY+2Y+MS+IYMS hepsi dep↓',
+                    'v6: 2/2 TAM DEP HAKİMİYETİ SPESİFİK — IY+2Y+MS+IYMS dep↓',
                     6.5, 2.27, tier='PREMIER')
 
     return signals
@@ -319,8 +381,6 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
 def generate_signals():
     now_tr = datetime.utcnow() + timedelta(hours=3)
 
-    # Tablo yapısı: fixture_id | odds_data | updated_at
-    # Tarih kolonu yok → basit select(*) kullan
     try:
         resp = supabase.table('match_odds').select('*').execute()
         rows = resp.data
@@ -351,7 +411,6 @@ def generate_signals():
         match_name = (odds_data.get('nesine_name') or
                       f"Fixture {row.get('fixture_id', '?')}")
 
-        # updated_at'i tarih olarak kullan (sadece gösterim için)
         updated_at = row.get('updated_at', '')
         if updated_at:
             try:
@@ -391,7 +450,7 @@ def generate_signals():
     ), reverse=True)
 
     print("=" * 72)
-    print(f"  ScorePop REVERSAL v5  |  {now_tr.strftime('%Y-%m-%d %H:%M')} TR")
+    print(f"  ScorePop REVERSAL v6  |  {now_tr.strftime('%Y-%m-%d %H:%M')} TR")
     print("=" * 72)
     print(f"  Taranan       : {len(rows)}")
     print(f"  Oran yok      : {skipped_no_odds}")
