@@ -316,7 +316,7 @@ async function analyze() {
   if (performances.length > 0) {
     const { error } = await sb
       .from('signal_performance')
-      .upsert(performances, { onConflict: 'fixture_id,analyzed_at::DATE' });
+      .upsert(performances, { onConflict: 'fixture_id' });
     if (error) console.error('[Analyzer] Performance kayıt hatası:', error.message);
     else console.log(`[Analyzer] ✅ ${performances.length} performans kaydı yazıldı`);
   }
