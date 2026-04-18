@@ -2,9 +2,9 @@ name: ScorePop AI Tracker
 
 on:
   schedule:
-    # Her gün 05:00–23:00 UTC arası çalışır (gece dinlenir)
-    # Sabah 05:00 UTC → 08:00 TR
-    - cron: "0 5 * * *"
+    # Günde 4 vardiya çalışır (Her biri ~4.75 saat sürer, birbirini takip eder)
+    # 05:00, 10:00, 15:00, 20:00 UTC (TR saatiyle 08:00, 13:00, 18:00, 23:00)
+    - cron: "0 5,10,15,20 * * *"
 
   workflow_dispatch:
     inputs:
@@ -25,7 +25,7 @@ on:
 
 concurrency:
   group: ai-tracker
-  cancel-in-progress: false    # Önceki oturum bitmeden yenisi başlamasın
+  cancel-in-progress: false    # Önceki oturum bitmeden yenisi başlamasın (Devir teslim güvenliği)
 
 jobs:
   track:
@@ -50,13 +50,14 @@ jobs:
         run: npm install && npm install @supabase/supabase-js
 
       # ── 4. Cache geri yükle ────────────────────────────────────────
-      # Önceki oturumun piyasa snapshot'larını ve fired alarmları yükle
+      # Önceki oturumun piyasa snapshot'larını, alarmlarını ve ÖĞRENME HAFIZASINI yükle
       - name: Restore tracker cache
         uses: actions/cache@v4
         with:
           path: |
             tracker_cache.json
             fired_alerts.json
+            learned_memory.json
           key: scorepop-cache-${{ github.run_id }}
           restore-keys: |
             scorepop-cache-
@@ -64,7 +65,7 @@ jobs:
       # ── 5. Tracker'ı çalıştır ──────────────────────────────────────
       - name: Run AI Tracker
         env:
-          # Supabase Veritabanı
+          # Supabase Veritabanı (Canlı skorlar için)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
 
@@ -74,12 +75,10 @@ jobs:
           INTERVAL_MINUTES: ${{ github.event.inputs.interval_minutes || '5' }}
           MAX_RUNTIME_MS:   "17100000"    # 4.75 saat
 
-          # Cache dosyaları
+          # Cache dosyaları (learned_memory eklendi)
           CACHE_FILE:       tracker_cache.json
           FIRED_FILE:       fired_alerts.json
-
-          # AI
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MEMORY_FILE:      learned_memory.json
 
           # E-posta
           SMTP_HOST:  ${{ secrets.SMTP_HOST }}
@@ -104,6 +103,7 @@ jobs:
           path: |
             tracker_cache.json
             fired_alerts.json
+            learned_memory.json
           key: scorepop-cache-${{ github.run_id }}
 
       # ── 7. Artifact olarak da sakla (7 gün) ───────────────────────
@@ -115,4 +115,5 @@ jobs:
           path: |
             tracker_cache.json
             fired_alerts.json
+            
           retention-days: 7
