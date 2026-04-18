@@ -91,7 +91,7 @@ jobs:
         # Çarpma işlemini kabuk(shell) üzerinde yapıp INTERVAL_MS olarak dışarı aktarıyoruz
         run: |
           export INTERVAL_MS=$(($INTERVAL_MINUTES * 60000))
-          node odds_tracker.js
+          node odds-tracker.js
 
       # ── 6. Cache kaydet ────────────────────────────────────────────
       - name: Save tracker cache
