@@ -4,21 +4,23 @@
  * Nesine CDN'den canlı oran çeker → piyasa delta'larını hesaplar →
  * sinyal motorunu çalıştırır → Claude AI ile yorumlar → e-posta atar.
  *
- * Supabase kullanmaz. Cache GitHub artifact olarak yaşar.
+ * Cache GitHub artifact olarak yaşar. Sadece Canlı Skor okumak için Supabase'e bağlanır.
  *
  * Ortam değişkenleri (GitHub Secrets):
- *   ANTHROPIC_API_KEY   — Claude API anahtarı
- *   SMTP_HOST           — Mail sunucusu (örn: smtp.gmail.com)
- *   SMTP_PORT           — Port (örn: 587)
- *   SMTP_USER           — Gönderen e-posta
- *   SMTP_PASS           — App password
- *   MAIL_TO             — Alıcı e-posta (virgülle ayırarak birden fazla)
- *   INTERVAL_MS         — Döngü aralığı ms (varsayılan: 300000 = 5 dk)
- *   MAX_RUNTIME_MS      — Toplam çalışma ms (varsayılan: 17100000 = 4.75 saat)
- *   LOOKAHEAD_HOURS     — Kaç saat içindeki maçlar (varsayılan: 8)
- *   CACHE_FILE          — Cache dosya yolu (varsayılan: tracker_cache.json)
- *   FIRED_FILE          — Gönderilen alarmlar (varsayılan: fired_alerts.json)
- *   DRY_RUN             — true → mail göndermez, loglar
+ * ANTHROPIC_API_KEY   — Claude API anahtarı
+ * SMTP_HOST           — Mail sunucusu (örn: smtp.gmail.com)
+ * SMTP_PORT           — Port (örn: 587)
+ * SMTP_USER           — Gönderen e-posta
+ * SMTP_PASS           — App password
+ * MAIL_TO             — Alıcı e-posta (virgülle ayırarak birden fazla)
+ * INTERVAL_MS         — Döngü aralığı ms (varsayılan: 300000 = 5 dk)
+ * MAX_RUNTIME_MS      — Toplam çalışma ms (varsayılan: 17100000 = 4.75 saat)
+ * LOOKAHEAD_HOURS     — Kaç saat içindeki maçlar (varsayılan: 8)
+ * CACHE_FILE          — Cache dosya yolu (varsayılan: tracker_cache.json)
+ * FIRED_FILE          — Gönderilen alarmlar (varsayılan: fired_alerts.json)
+ * DRY_RUN             — true → mail göndermez, loglar
+ * SUPABASE_URL        — Supabase Proje URL'si (Canlı skorlar için)
+ * SUPABASE_KEY        — Supabase API Anahtarı (Canlı skorlar için)
  * ═══════════════════════════════════════════════════════════════════
  */
 'use strict';
@@ -27,6 +29,7 @@ const https    = require('https');
 const fs       = require('fs');
 const path     = require('path');
 const nodemailer = require('nodemailer');
+const { createClient } = require('@supabase/supabase-js');
 
 // ── Config ──────────────────────────────────────────────────────────
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || '';
@@ -38,8 +41,13 @@ const FIRED_FILE     = process.env.FIRED_FILE  || 'fired_alerts.json';
 const DRY_RUN        = process.env.DRY_RUN === 'true';
 const MIN_SIGNALS    = 2;   // E-posta için minimum sinyal sayısı
 
+// Canlı skor okumak için Supabase (Eğer ayarlı değilse sessizce iptal olur)
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
 // ── State ────────────────────────────────────────────────────────────
-// matchCache: fixture_id → { markets, ev_ft_cum, dep_ft_cum, snapshots:[], ... }
+// matchCache: fixture_id → { markets, ev_ft_cum, dep_ft_cum, snapshots:[], liveData:{}, ... }
 const matchCache = new Map();
 let firedAlerts  = {};       // fixture_id → [sinyal tipi, ...]
 let cycleCount   = 0;
@@ -107,7 +115,7 @@ function fetchJSON(url) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 3 — TAKIM EŞLEŞTİRME (odds-tracker.js'den)
+// BÖLÜM 3 — TAKIM EŞLEŞTİRME
 // ════════════════════════════════════════════════════════════════════
 const TEAM_ALIASES = {
   'not forest':'nottingham forest','cry. palace':'crystal palace',
@@ -147,7 +155,7 @@ function findBestMatch(home, away, events) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 4 — MARKET PARSE (odds-tracker.js'den)
+// BÖLÜM 4 — MARKET PARSE
 // ════════════════════════════════════════════════════════════════════
 function parseMarkets(maArr) {
   const m = {};
@@ -217,7 +225,7 @@ function calcCumDelta(prev, curr) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 6 — SİNYAL MOTORU (reversal_signals.py'dan port)
+// BÖLÜM 6 — SİNYAL MOTORU
 // ════════════════════════════════════════════════════════════════════
 function gm(markets, key, sub) {
   const v = markets?.[key]?.[sub];
@@ -585,6 +593,72 @@ function loadFixtures() {
 }
 
 // ════════════════════════════════════════════════════════════════════
+// BÖLÜM 9.5 — CANLI MAÇ SKORLARI (HT / FT YAKALAYICI)
+// ════════════════════════════════════════════════════════════════════
+function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
+  if (htHome === null || ftHome === null) return null;
+  const ht = htHome > htAway ? '1' : htHome < htAway ? '2' : 'X';
+  const ft = ftHome > ftAway ? '1' : ftHome < ftAway ? '2' : 'X';
+  return `${ht}/${ft}`;
+}
+
+async function syncLiveMatches() {
+  if (!sb) return; // Supabase ayarlı değilse sessizce atla
+
+  let liveRows;
+  try {
+    const { data, error } = await sb
+      .from('live_matches')
+      .select('fixture_id, status_short, home_score, away_score')
+      .in('status_short', ['1H','HT','2H','FT']);
+
+    if (error) { console.error('[Live] Supabase hata:', error.message); return; }
+    liveRows = data || [];
+  } catch (e) {
+    console.error('[Live] Hata:', e.message); return;
+  }
+
+  if (liveRows.length === 0) return;
+
+  for (const row of liveRows) {
+    const fid = String(row.fixture_id);
+    const status = row.status_short;
+    const hScore = row.home_score ?? null;
+    const aScore = row.away_score ?? null;
+
+    // Sadece bizim takip ettiğimiz maçları işle
+    if (!matchCache.has(fid)) continue;
+
+    const match = matchCache.get(fid);
+    const prevLive = match.liveData || {};
+
+    // Eğer statü değişmediyse (ve maç bitmediyse) işlem yapma
+    if (prevLive.status === status && status !== 'FT') continue;
+
+    let htHome = prevLive.htHome ?? null;
+    let htAway = prevLive.htAway ?? null;
+    let ftHome = prevLive.ftHome ?? null;
+    let ftAway = prevLive.ftAway ?? null;
+    let htFtResult = prevLive.htFtResult ?? null;
+
+    if (status === 'HT') {
+      htHome = hScore;
+      htAway = aScore;
+      console.log(`  ⏸  HT Yakalandı: ${match.name} | İY: ${hScore}-${aScore}`);
+    } else if (status === 'FT' && prevLive.status !== 'FT') {
+      ftHome = hScore;
+      ftAway = aScore;
+      htFtResult = calcHtFtResult(htHome, htAway, ftHome, ftAway);
+      console.log(`  🏁 FT Yakalandı: ${match.name} | HT:${htHome}-${htAway} FT:${ftHome}-${ftAway} → [${htFtResult}]`);
+    }
+
+    // Güncel durumu doğrudan JSON cache verisine göm
+    match.liveData = { status, htHome, htAway, ftHome, ftAway, htFtResult };
+    matchCache.set(fid, match);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
 // BÖLÜM 10 — ANA DÖNGÜ
 // ════════════════════════════════════════════════════════════════════
 function hoursToKickoff(ko) {
@@ -649,12 +723,13 @@ async function runCycle() {
     snapshots.push({ time: new Date().toISOString(), markets: currMarkets, ev_ft, dep_ft });
     if (snapshots.length > 10) snapshots.shift();
 
-    // Cache güncelle
+    // Cache güncelle (Canlı maç verisini de koru)
+    const liveData = prev?.liveData || {};
     matchCache.set(fid, {
       name: `${fix.home_team} vs ${fix.away_team}`,
       kickoff: fix.kickoff,
       latestMarkets: currMarkets,
-      ev_ft_cum, dep_ft_cum, snapshots,
+      ev_ft_cum, dep_ft_cum, snapshots, liveData,
     });
 
     // Sinyal motoru
@@ -684,6 +759,8 @@ async function runCycle() {
 
   if (matchesWithSignals.length === 0) {
     console.log('[Tracker] Yeni alarm yok, devam…');
+    // ── Canlı Skorları Eşitle ────────────────────────────────────────
+    await syncLiveMatches();
     saveCache();
     return;
   }
@@ -705,6 +782,9 @@ async function runCycle() {
       markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
     }
   }
+
+  // ── Canlı Skorları Eşitle ────────────────────────────────────────
+  await syncLiveMatches();
 
   saveCache();
 }
@@ -756,8 +836,8 @@ async function main() {
     console.log('\n[Top Hareketler]:');
     for (const [fid, v] of movers) {
       console.log(`  ${v.name || fid} | ev_cum=${v.ev_ft_cum} dep_cum=${v.dep_ft_cum}`);
+    }
   }
 }
-  }
 
 main().catch(e => { console.error('[FATAL]', e); process.exit(1); });
