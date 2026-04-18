@@ -1,19 +1,16 @@
 {
-  "name": "scorepop",
+  "name": "scorepop-ai-tracker",
   "version": "1.0.0",
-  "description": "ScorePop Odds Tracker & Signal Analyzer",
-  "main": "odds-tracker.js",
+  "description": "AI destekli piyasa hareketi takip sistemi",
+  "main": "odds_tracker.js",
   "scripts": {
-    "tracker": "node odds-tracker.js",
-    "analyze": "node analyzer.js",
-    "analyze:7d": "node analyzer.js --days 7",
-    "analyze:30d": "node analyzer.js --days 30",
-    "odds": "node odds-update.js"
+    "start": "node ai_tracker.js",
+    "dry":   "DRY_RUN=true node ai_tracker.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0"
+    "nodemailer": "^6.9.14"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18"
   }
 }
