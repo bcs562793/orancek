@@ -758,5 +758,6 @@ async function main() {
       console.log(`  ${v.name || fid} | ev_cum=${v.ev_ft_cum} dep_cum=${v.dep_ft_cum}`);
   }
 }
+  }
 
 main().catch(e => { console.error('[FATAL]', e); process.exit(1); });
