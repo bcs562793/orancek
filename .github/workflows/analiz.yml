@@ -43,11 +43,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
+          # Not: package-lock.json hatası almamak için 'cache: "npm"' satırı kaldırıldı.
 
       # ── 3. Bağımlılıklar ───────────────────────────────────────────
       - name: Install dependencies
-        run: npm install
+        run: npm install && npm install @supabase/supabase-js
 
       # ── 4. Cache geri yükle ────────────────────────────────────────
       # Önceki oturumun piyasa snapshot'larını ve fired alarmları yükle
@@ -64,8 +64,11 @@ jobs:
       # ── 5. Tracker'ı çalıştır ──────────────────────────────────────
       - name: Run AI Tracker
         env:
+          # Supabase Veritabanı
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
           # Bahis piyasası
-          FIXTURES_FILE:    future_matches.json
           LOOKAHEAD_HOURS:  ${{ github.event.inputs.lookahead_hours || '8' }}
           # Direkt olarak MS yerine dakikayı çevresel değişken yapıyoruz
           INTERVAL_MINUTES: ${{ github.event.inputs.interval_minutes || '5' }}
