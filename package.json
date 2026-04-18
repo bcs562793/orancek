@@ -2,7 +2,7 @@
   "name": "scorepop-ai-tracker",
   "version": "1.0.0",
   "description": "AI destekli piyasa hareketi takip sistemi",
-  "main": "odds_tracker.js",
+  "main": "odds-tracker.js",
   "scripts": {
     "start": "node ai_tracker.js",
     "dry":   "DRY_RUN=true node ai_tracker.js"
