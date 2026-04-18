@@ -631,7 +631,7 @@ async function loadFixtures() {
   try {
     console.log('[Fixtures] Supabase "fixture_matches" tablosu kontrol ediliyor...');
     const { data, error } = await sb
-      .from('fixture_matches')
+      .from('future_matches')
       .select('*');
 
     if (error) {
