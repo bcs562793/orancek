@@ -1,0 +1,155 @@
+# ══════════════════════════════════════════════════════════════════════
+# SCOREPOP — GitHub Actions Workflow
+#
+# 2 iş tanımı:
+#   1. odds-tracker : Her 5 saatte bir tetiklenir, 4.5 saat boyunca
+#                     Nesine'yi izler ve snapshot'ları kaydeder.
+#                     Aynı job live_matches HT/FT cache'ini de yönetir.
+#
+#   2. weekly-analysis : Pazartesi sabahı çalışır, geçen haftanın
+#                        sinyal → sonuç korelasyon raporunu üretir.
+#
+# Gerekli Secrets (Repository → Settings → Secrets and variables → Actions):
+#   SUPABASE_URL  — https://xxxx.supabase.co
+#   SUPABASE_KEY  — service_role anahtarı (anon değil!)
+# ══════════════════════════════════════════════════════════════════════
+
+name: ScorePop Odds Tracker
+
+on:
+  schedule:
+    # ── Odds Tracker ─────────────────────────────────────────────────
+    # Her 5 saatte bir başlar. GitHub cron UTC'dir.
+    # 00:00 06:00 12:00 18:00 UTC = 03:00 09:00 15:00 21:00 TR
+    - cron: '0 0,6,12,18 * * *'   # normal günler
+    # Cumartesi ve Pazar ek sıklık (6h = 4 kez + 00 06 12 18)
+    # GitHub'da 6 farklı zaman girilmeli; burada tüm haftayı kapsar:
+    - cron: '0 3,9,15,21 * * 6,0' # sadece Cmt/Paz için +3 saat offset
+
+    # ── Haftalık Analiz ──────────────────────────────────────────────
+    # Pazartesi 05:00 UTC (08:00 TR)
+    - cron: '0 5 * * 1'
+
+  # Manuel tetikleme (test için)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Çalışma modu'
+        required: true
+        default: 'tracker'
+        type: choice
+        options:
+          - tracker
+          - analyze
+          - analyze-7d
+          - analyze-30d
+
+# Aynı anda sadece 1 tracker çalışsın (örtüşmeyi önle)
+concurrency:
+  group: scorepop-tracker
+  cancel-in-progress: false  # çalışanı iptal etme, yenisini kuyruğa al
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════
+  # JOB 1: ODDS TRACKER (Sürekli İzleme)
+  # ════════════════════════════════════════════════════════════════════
+  odds-tracker:
+    name: 📊 Odds Tracker (4.5h Loop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 290  # 4 saat 50 dk (Actions limiti 6 saat, güvenli taraf)
+
+    # Sadece tracker modunda çalış (veya schedule'dan gelen)
+    if: |
+      github.event_name == 'schedule' && github.event.schedule != '0 5 * * 1'
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'tracker')
+
+    steps:
+      - name: 📥 Repo checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Node.js kurulum
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📦 Bağımlılık kurulum
+        run: npm ci
+        # package.json yoksa aşağıdaki adımı da ekle:
+
+      - name: 🔧 Eksik package.json oluştur (ilk çalışma)
+        run: |
+          if [ ! -f package.json ]; then
+            echo '{"name":"scorepop","version":"1.0.0","dependencies":{"@supabase/supabase-js":"^2.0.0"}}' > package.json
+          fi
+          npm install --no-save @supabase/supabase-js 2>/dev/null || true
+
+      - name: 🔍 Odds Tracker başlat
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # 4.5 saat = 16200000 ms (Actions timeout'dan önce temiz çıkış için)
+          MAX_RUNTIME_MS: '16200000'
+          INTERVAL_MS: '300000'
+        run: node odds-tracker.js
+
+      - name: 📋 Özet (hata durumunda da çalış)
+        if: always()
+        run: |
+          echo "=== Tracker Tamamlandı ==="
+          echo "Çalışma zamanı: $(date -u)"
+
+  # ════════════════════════════════════════════════════════════════════
+  # JOB 2: HAFTALIK ANALİZ
+  # ════════════════════════════════════════════════════════════════════
+  weekly-analysis:
+    name: 📈 Haftalık Sinyal Analizi
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '0 5 * * 1')
+      || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.mode, 'analyze'))
+
+    steps:
+      - name: 📥 Repo checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Node.js kurulum
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Bağımlılık kurulum
+        run: |
+          if [ ! -f package.json ]; then
+            echo '{"name":"scorepop","version":"1.0.0","dependencies":{"@supabase/supabase-js":"^2.0.0"}}' > package.json
+          fi
+          npm install --no-save @supabase/supabase-js 2>/dev/null || true
+
+      - name: 📊 Analiz çalıştır
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          # Manuel modda gün sayısını belirle
+          MODE="${{ github.event.inputs.mode }}"
+          if [[ "$MODE" == "analyze-30d" ]]; then
+            DAYS=30
+          elif [[ "$MODE" == "analyze-7d" ]]; then
+            DAYS=7
+          else
+            DAYS=7
+          fi
+          echo "=== $DAYS günlük analiz başlatılıyor ==="
+          node analyzer.js --days $DAYS --min-lift 1.35
+
+      - name: 📤 Raporu artifact olarak kaydet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-analysis-${{ github.run_id }}
+          path: |
+            *.log
+          retention-days: 30
+          if-no-files-found: ignore
