@@ -290,6 +290,7 @@ async function analyze() {
     performances.push({
       fixture_id:        fid,
       analyzed_at:       now.toISOString(),
+      analysis_date:     now.toISOString().slice(0, 10),  // UNIQUE için düz tarih
       match_name:        `${fix.home} vs ${fix.away}`,
       match_date:        fix.date ? fix.date.slice(0, 10) : null,
       top_signal_type:   topSig.type,
@@ -316,7 +317,7 @@ async function analyze() {
   if (performances.length > 0) {
     const { error } = await sb
       .from('signal_performance')
-      .upsert(performances, { onConflict: 'fixture_id' });
+      .upsert(performances, { onConflict: 'fixture_id,analysis_date' });
     if (error) console.error('[Analyzer] Performance kayıt hatası:', error.message);
     else console.log(`[Analyzer] ✅ ${performances.length} performans kaydı yazıldı`);
   }
