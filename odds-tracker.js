@@ -755,8 +755,7 @@ async function main() {
   if (movers.length) {
     console.log('\n[Top Hareketler]:');
     for (const [fid, v] of movers) {
-      console.log(`  ${v.name || fid} | ev_cum=${v.ev_ft_cum:+} dep_cum=${v.dep_ft_cum:+}`);
-    }
+      console.log(`  ${v.name || fid} | ev_cum=${v.ev_ft_cum} dep_cum=${v.dep_ft_cum}`);
   }
 }
 
