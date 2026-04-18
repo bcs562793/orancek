@@ -47,7 +47,7 @@ jobs:
 
       # ── 3. Bağımlılıklar ───────────────────────────────────────────
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       # ── 4. Cache geri yükle ────────────────────────────────────────
       # Önceki oturumun piyasa snapshot'larını ve fired alarmları yükle
