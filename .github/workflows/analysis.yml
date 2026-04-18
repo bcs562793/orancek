@@ -1,0 +1,139 @@
+name: Odds Trend Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Trend eşiği (% değişim — default: 3.0)"
+        required: false
+        default: "3.0"
+      sql_file:
+        description: "SQL dump dosya adı (repo kökünde olmalı, Supabase yoksa)"
+        required: false
+        default: ""
+      results_file:
+        description: "Sonuç dosyası adı (repo kökünde olmalı)"
+        required: false
+        default: "sonuc_.rtf"
+  push:
+    paths:
+      - "odds_trend_analysis.py"
+      - "sonuc_*.rtf"
+      - "*.sql"
+
+jobs:
+  analyze:
+    name: Run Odds Trend Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+    steps:
+      # ── 1. Repo klonla ────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python kur ─────────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ── 3. Bağımlılıkları kur ─────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            pandas==2.2.* \
+            numpy==1.26.* \
+            matplotlib==3.8.* \
+            seaborn==0.13.* \
+            scipy==1.12.* \
+            tabulate \
+            supabase
+
+      # ── 4. extract-text kur (RTF okumak için) ─────────────────────────────
+      - name: Install extract-text (pandoc)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y pandoc
+          # extract-text wrapper oluştur
+          echo '#!/bin/bash' | sudo tee /usr/local/bin/extract-text > /dev/null
+          echo 'pandoc "$1" -t plain 2>/dev/null' | sudo tee -a /usr/local/bin/extract-text > /dev/null
+          sudo chmod +x /usr/local/bin/extract-text
+
+      # ── 5. Sonuç dosyasını tespit et ──────────────────────────────────────
+      - name: Detect results file
+        id: detect_results
+        run: |
+          RESULTS="${{ github.event.inputs.results_file }}"
+          if [ -z "$RESULTS" ]; then
+            # İlk bulunan sonuç dosyasını al
+            RESULTS=$(ls sonuc_*.rtf sonuc_*.csv sonuc_*.tsv 2>/dev/null | head -1)
+          fi
+          if [ -z "$RESULTS" ]; then
+            echo "❌ Sonuç dosyası bulunamadı!" && exit 1
+          fi
+          echo "results_file=$RESULTS" >> $GITHUB_OUTPUT
+          echo "Kullanılan sonuç dosyası: $RESULTS"
+
+      # ── 6. Analizi çalıştır (Supabase varsa) ──────────────────────────────
+      - name: Run analysis (Supabase)
+        if: env.SUPABASE_URL != '' && env.SUPABASE_KEY != ''
+        run: |
+          python odds_trend_analysis.py \
+            --results "${{ steps.detect_results.outputs.results_file }}" \
+            --threshold "${{ github.event.inputs.threshold || '3.0' }}" \
+            --out output
+
+      # ── 7. Analizi çalıştır (SQL dump) ────────────────────────────────────
+      - name: Run analysis (SQL dump)
+        if: env.SUPABASE_URL == '' || env.SUPABASE_KEY == ''
+        run: |
+          SQL_FILE="${{ github.event.inputs.sql_file }}"
+          if [ -z "$SQL_FILE" ]; then
+            SQL_FILE=$(ls *.sql 2>/dev/null | head -1)
+          fi
+          if [ -z "$SQL_FILE" ]; then
+            echo "❌ Ne Supabase secrets ne de SQL dump dosyası bulunamadı!"
+            echo "   Lütfen SUPABASE_URL + SUPABASE_KEY secrets ekleyin,"
+            echo "   ya da bir .sql dosyasını repoya yükleyin."
+            exit 1
+          fi
+          python odds_trend_analysis.py \
+            --results "${{ steps.detect_results.outputs.results_file }}" \
+            --sql "$SQL_FILE" \
+            --threshold "${{ github.event.inputs.threshold || '3.0' }}" \
+            --out output
+
+      # ── 8. Raporu özetle ──────────────────────────────────────────────────
+      - name: Print report summary
+        run: |
+          echo "====== RAPOR ÖZETİ ======"
+          head -80 output/REPORT.md || true
+          echo "========================="
+          echo ""
+          echo "Oluşturulan dosyalar:"
+          ls -lh output/
+
+      # ── 9. Çıktıları artifact olarak yükle ───────────────────────────────
+      - name: Upload analysis artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: odds-trend-analysis-${{ github.run_number }}
+          path: |
+            output/REPORT.md
+            output/*.png
+            output/merged_data.csv
+          retention-days: 30
+
+      # ── 10. İsteğe bağlı: Raporu job özeti olarak göster ─────────────────
+      - name: Write job summary
+        run: |
+          echo "## 📊 Odds Trend Analiz Sonuçları" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat output/REPORT.md >> $GITHUB_STEP_SUMMARY
