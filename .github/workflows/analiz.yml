@@ -67,7 +67,8 @@ jobs:
           # Bahis piyasası
           FIXTURES_FILE:    future_matches.json
           LOOKAHEAD_HOURS:  ${{ github.event.inputs.lookahead_hours || '8' }}
-          INTERVAL_MS:      ${{ fromJSON(github.event.inputs.interval_minutes || '5') * 60000 }}
+          # Direkt olarak MS yerine dakikayı çevresel değişken yapıyoruz
+          INTERVAL_MINUTES: ${{ github.event.inputs.interval_minutes || '5' }}
           MAX_RUNTIME_MS:   "17100000"    # 4.75 saat
 
           # Cache dosyaları
@@ -87,7 +88,10 @@ jobs:
           # Mod
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
 
-        run: node ai_tracker.js
+        # Çarpma işlemini kabuk(shell) üzerinde yapıp INTERVAL_MS olarak dışarı aktarıyoruz
+        run: |
+          export INTERVAL_MS=$(($INTERVAL_MINUTES * 60000))
+          node odds_tracker.js
 
       # ── 6. Cache kaydet ────────────────────────────────────────────
       - name: Save tracker cache
