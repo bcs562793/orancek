@@ -1,0 +1,148 @@
+{
+  "patterns": {
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T02:38:39.809Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "1/1": {
+        "count": 2,
+        "firstSeen": "2026-04-19T03:23:36.607Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T10:25:09.146Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.281Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_low|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T03:43:37.941Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T10:25:09.147Z"
+      }
+    },
+    "ms1_vlow|iy2_high|evft_flat|depft_pos|iyms21_low|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T05:53:36.777Z"
+      }
+    },
+    "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T07:00:08.011Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_low|au25_med": {
+      "2/2": {
+        "count": 2,
+        "firstSeen": "2026-04-19T07:00:08.011Z"
+      },
+      "X/2": {
+        "count": 2,
+        "firstSeen": "2026-04-19T08:55:08.710Z"
+      }
+    },
+    "ms1_high|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_low|au25_vhigh": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T07:20:08.517Z"
+      }
+    },
+    "ms1_high|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T07:25:08.589Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_low|evmom_stable|depmon_stable|div_no|ms2_med|au25_low": {
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T07:25:08.589Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_high": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T07:55:08.121Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T08:05:08.215Z"
+      },
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.281Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T08:55:08.710Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T09:25:09.581Z"
+      }
+    },
+    "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_vhigh": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T09:30:08.643Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T10:10:09.353Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T10:56:31.731Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.280Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.280Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.281Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_high": {
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.281Z"
+      }
+    },
+    "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T16:54:53.283Z"
+      }
+    }
+  },
+  "version": 2,
+  "totalLearned": 29
+}
