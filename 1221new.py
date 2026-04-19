@@ -1,48 +1,32 @@
 """
-reversal_signals.py v9 — Post-Mortem Bulgularına Dayalı Yeniden Yazım
-======================================================================
+reversal_signals.py v10 — Chelsea/Aalborg/Adelaide Post-Mortem Patchleri
+=========================================================================
 
-32 MAÇLIK POST-MORTEM ANALİZİ (sonuc_.rtf + match_odds_rows__2_.csv):
+v9'dan v10'a DEĞİŞİKLİKLER (3 maç zaman serisi analizinden):
 
-  TEMEL ÇIKTI: EV_FT≤-3 + DEP_FT≥2 patternı 9 maçta şu dağılımı verdi:
-    1/1: 3 (Montpellier, Almere, Machida)
-    2/1: 2 (Lens, Rodez)       ← iyms21 ≤ 22 + iy2 ≥ 4.5
-    1/X: 2 (Roda, Melbourne)   ← iy2 < 5.0 + iyms21 < 20
-    X/1: 1 (Le Mans)           ← iy2 ≈ 5, iyms21 ≈ 23
-    2/2: 1 (Nancy)             ← dep her yarı favori görüldü
+  PATCH 1 — CHELSEA BLIND SPOT GUARD [Chelsea 2/2 fix]
+    1/1 sinyali üretilirken:
+    ms1 güçleniyor (ch_ms1≤0) + iyms22 için hiç baskı yok (ch_iyms22≥0)
+    + iy2 ≥ 3.0 (dep IY gerçek tehdit) → lift × 0.65, ⚠DEP-KÖR etiketi
+    Mantık: Piyasa evi görüp depi tamamen görmezden geliyorsa 2/2 sürprizi riski.
 
-v9 FIXES (her biri belgelenmiş vaka ile):
+  PATCH 2 — ADELAIDE IY2 GUARD [Adelaide 2/1 fix]
+    1/1 sinyalinde iy2 < 3.5 ise lift × 0.55 (önceki 0.85 eşiğini sertleştir)
+    Mantık: Dep IY oranı 3.5'in altındaysa dep gerçekten ilk yarıyı kazanabilir
+    → 1/1 yerine 2/1 veya X/1 gelebilir.
 
-  FIX 1 — 1/1 GUARD: iyms21 eşiği [Lens, Rodez, Roda fix]
-    EV_FT≤-3 + DEP_FT≥2 → 1/1 SİNYALİ ANCAK iyms21 > 24 ise
-    iyms21 ≤ 22 ise → 2/1 adayı (dep IY bekleniyor)
-    22-24 arası gri bölge → her iki sinyal standart
+  PATCH 3 — 2/1 KONSİSTENSİ GÜÇLENDIRME [Adelaide fix]
+    market_consistency_score'da 2/1 için:
+    ch_ms1 ≤ 0 ise +2 (önceden +1'di) — ev MS da güçleniyorsa daha anlamlı.
 
-  FIX 2 — 2/1 IY2 GUARD: dep IY çok düşükse bastır [Melbourne, Roda fix]
-    2/1 için iy2 ≥ 4.0 zorunlu
-    iy2 < 4.0 → "dep IY görülebilir" → X/1 veya 1/X riski yüksek → bastır
+  PATCH 4 — ZEMİN NOTU (zaman serisi kümülatif)
+    Supabase single-snapshot mimarisinde kümülatif d_21 hesaplanamaz.
+    Gelecekte match_odds_history eklenirse:
+    ev_ft_cum ≤ -3 + ch_iyms21_cum ≤ -3 → ELITE terfi kuralı.
 
-  FIX 3 — FENERBAHÇE GUARD: ch_ms1 erken kontrol [Fenerbahçe fix]
-    IYMS≤20 path: signal üretim aşamasında ch_ms1 > 0 ise üretme
-    (v8'de sadece filter aşamasındaydı, üretiliyordu)
-
-  FIX 4 — 2/2 YENİ SİNYALLER [Santa Fe, Sampdoria, R.Sociedad, Nancy]
-    a) iyms22 ≤ 5 + ms2 ≤ 2.5 → dep her yarı favorisi = doğal 2/2
-    b) iyms22 ≤ 10 + ch_iyms22 = -1 + ms2 ≤ 3.5 → 2/2 divergence
-
-  FIX 5 — Santa Fe DOĞRU OKUMA [İY:1-2 MS:2-3 = 2/2]
-    Önceki analizde 1/1 zannedildi. Gerçek: 2/2.
-    EV_FT=+3 + DEP_FT=-2 + iyms22=8.68 + ch_iyms22=-1 → 2/2 sinyali eklendi
-
-  FIX 6 — 2/1 IYMS EŞIĞI DARALMA
-    EV_FT≤-3 + DEP_FT≥2 kombinasyonunda:
-    iyms21=20.85 (Lens) → 2/1 ✓
-    iyms21=21.15 (Rodez) → 2/1 ✓
-    iyms21=18.1 (Roda) → 1/X ✗ (iy2=4.89 çok düşük)
-    KURAL: iyms21 ≤ 22 + iy2 ≥ 4.5 → 2/1 sinyali aktive
-
-v8'den KORUNANLAR:
-  - ch_iyms21 > 0 guard (Vitesse fix)
+v9'dan KORUNANLAR:
+  - FIX 1-6 (Lens/Rodez/Melbourne/Roda/Fenerbahçe/SantaFe vb.)
+  - ch_iyms21 > 0 guard (Vitesse)
   - DEP_FT ≥ 3 tier düşürme
   - Yaş penaltısı
   - Tutarlılık skoru
@@ -121,7 +105,7 @@ def age_label(h):
     return f' 🕐ESKİ({h:.1f}sa)'
 
 # ─────────────────────────────────────────────────────────────────────
-# ANTİ-REVERSAL GUARD (v9 genişletildi)
+# ANTİ-REVERSAL GUARD (v9 korundu)
 # ─────────────────────────────────────────────────────────────────────
 
 def is_signal_reversed(sig_type, ev_ft_sum, dep_ft_sum,
@@ -147,7 +131,7 @@ def is_signal_reversed(sig_type, ev_ft_sum, dep_ft_sum,
     return False, ''
 
 # ─────────────────────────────────────────────────────────────────────
-# TUTARLILIK SKORU
+# TUTARLILIK SKORU — PATCH 3: 2/1 ch_ms1 ağırlığı +2'ye yükseltildi
 # ─────────────────────────────────────────────────────────────────────
 
 def market_consistency_score(changes, signals, ev_ft_sum, dep_ft_sum):
@@ -165,7 +149,8 @@ def market_consistency_score(changes, signals, ev_ft_sum, dep_ft_sum):
         ch_ms1 = get_change(changes, '1x2', 'home')
         ch_ms2 = get_change(changes, '1x2', 'away')
         if dominant_type == '2/1':
-            if ch_ms1 is not None: score += (1 if ch_ms1 <= 0 else -2)
+            # PATCH 3: ch_ms1 ağırlığı artırıldı (+2, önce +1)
+            if ch_ms1 is not None: score += (2 if ch_ms1 <= 0 else -2)
             if ev_ft_sum is not None: score += (1 if ev_ft_sum <= 0 else -1)
         else:
             if ch_ms2 is not None: score += (1 if ch_ms2 <= 0 else -2)
@@ -173,7 +158,7 @@ def market_consistency_score(changes, signals, ev_ft_sum, dep_ft_sum):
     return max(0, min(10, score))
 
 # ─────────────────────────────────────────────────────────────────────
-# SİNYAL MOTORU v9
+# SİNYAL MOTORU v10
 # ─────────────────────────────────────────────────────────────────────
 
 def evaluate_reversal_signals(markets, changes, sofa_1x2):
@@ -230,10 +215,9 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
                         '_lift_raw': lift_val})
 
     # ══════════════════════════════════════════════════════════════════
-    # 2/1 SİNYALLERİ
+    # 2/1 SİNYALLERİ (v9'dan korundu)
     # ══════════════════════════════════════════════════════════════════
 
-    # ── Lens Fingerprint ──────────────────────────────────────────────
     lens_base = (ms1 and ms1 <= 1.30 and iy2 and iy2 >= 3.5 and
                  iy1 and iy1 <= 1.70 and sy1 and sy1 <= 1.70 and
                  iyms21 and iyms21 <= 25)
@@ -244,7 +228,7 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
             sig('2/1', 'Lens FP + DCG(2.Y)≤1.9', 4.26, 1.49)
         if has_change and ch_iyms21 == -1:
             if ch_ms1 is not None and ch_ms1 > 0:
-                pass  # Fenerbahçe guard
+                pass
             elif is_ev_dominance:
                 sig('2/1', 'ELITE: Lens FP + IYMS_2/1↓ + EV FT TEMİZ',
                     8.0, 2.80, tier='ELITE')
@@ -254,12 +238,9 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
         if sofa_ch1 == -1 and sofa_ch2 == 1:
             sig('2/1', 'Lens FP + Sofa(Ev↓+Dep↑)', 4.41, 1.54)
 
-    # ── IYMS 2/1 ≤ 20 ─────────────────────────────────────────────────
-    # FIX v9 — FENERBAHçE: ch_ms1 > 0 ise üretme (erken kontrol)
     if iyms21 and iyms21 <= 20:
-        # FIX 3: ch_ms1 > 0 → üretme (Fenerbahçe: ev MS oranı yükseldiyse 2/1 değil)
         if ch_ms1 is not None and ch_ms1 > 0:
-            pass  # Fenerbahçe fix — sinyal üretme
+            pass  # Fenerbahçe fix
         else:
             prec, lift = 4.58, 1.60
             sofa_tag = ''
@@ -275,7 +256,6 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
             elif sofa_ch1 == -1:
                 prec, lift = 5.89, 2.05
                 sofa_tag = ' + Sofa(Ev↓)'
-            # FIX 2: iy2 < 4.0 ise 2/1 sinyali bastır (dep IY görülebilir = X riski)
             if iy2 and iy2 < 4.0:
                 lift = lift * 0.70
                 sofa_tag += ' ⚠ İY2<4.0(X/1↑riski)'
@@ -287,7 +267,6 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
     elif iyms21 and iyms21 <= 25:
         sig('2/1', 'IYMS_2/1≤25', 3.82, 1.33)
 
-    # ── DCG + İY-2 ─────────────────────────────────────────────────────
     if dcg_2h and dcg_2h <= 1.7 and iy2 and iy2 >= 3.5:
         prec, lift = 4.23, 1.48
         extra = ''
@@ -295,7 +274,6 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
             prec, lift = 4.94, 1.72; extra = ' + Sofa(Ev↑+Dep↓)'
         sig('2/1', f'DCG(2.Y)≤1.7 + İY-2≥3.5{extra}', prec, lift)
 
-    # ── MS-1 + MS-2 ────────────────────────────────────────────────────
     if ms1 and ms1 <= 2.0 and ms2 and ms2 >= 4.0 and has_meaningful_change:
         prec, lift = 3.64, 1.27; extra = ''
         if sofa_ch1 == 1 and sofa_ch2 == -1:
@@ -305,20 +283,18 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
     if han01 and han01 <= 2.5 and iy2 and iy2 >= 3.5:
         sig('2/1', 'Han(0:1)_1≤2.5 + İY-2≥3.5', 3.9, 1.36)
 
-    # ── v9 YENİ: EV_FT≤-3 + DEP_FT≥2 + IYMS21 ≤ 22 → 2/1 (Lens/Rodez pattern) ─
-    # FIX 1 + FIX 2: iyms21 ≤ 22 + iy2 ≥ 4.5 + ev_ft ≤ -3 → 2/1 divergence
     if (is_ev_dominance and ev_ft_sum <= -3 and
             iyms21 and iyms21 <= 22 and
-            iy2 and iy2 >= 4.5 and          # FIX 2: iy2 düşükse bastır
-            has_change and ch_iyms21 == -1 and  # IYMS 2/1 ucuzlaşıyor = smart money
-            (ch_ms1 is None or ch_ms1 <= 0)):   # FIX 3: Fenerbahçe guard
+            iy2 and iy2 >= 4.5 and
+            has_change and ch_iyms21 == -1 and
+            (ch_ms1 is None or ch_ms1 <= 0)):
         tier_v = 'PREMIER' if dep_ft_sum <= 2 else 'STANDART'
         sig('2/1',
             f'v9: 2/1 EV_FT+IYMS_DIVERGENCE — ev FT↓, IYMS21≤22, İY2≥4.5, IYMS↓',
             6.5, 2.27, tier=tier_v)
 
     # ══════════════════════════════════════════════════════════════════
-    # 1/2 SİNYALLERİ
+    # 1/2 SİNYALLERİ (v9'dan korundu)
     # ══════════════════════════════════════════════════════════════════
 
     is_pure_12 = (has_change and
@@ -368,18 +344,32 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
         sig('1/2', 'MS-2≤2.5 + MS-1≥4.5', 4.1, 1.83)
 
     # ══════════════════════════════════════════════════════════════════
-    # 1/1 EV HAKİMİYETİ — v9 iyms21 GUARD EKLENDİ
+    # 1/1 EV HAKİMİYETİ
+    # PATCH 1 — Chelsea blind spot guard
+    # PATCH 2 — Adelaide iy2 < 3.5 guard
     # ══════════════════════════════════════════════════════════════════
 
     if is_ev_dominance and has_change:
         ch_iy1ok  = (ch_iy1 is not None and ch_iy1 <= 0)
         ch_sy1ok  = (ch_sy1 is not None and ch_sy1 <= 0)
         ch_ms1ok  = (ch_ms1 is not None and ch_ms1 <= 0)
-        iy2_str   = iy2 and iy2 >= 5.0   # FIX 2: dep IY gerçekten uzak olmalı
         dep_ft_hi = (dep_ft_sum >= 3)
 
-        # FIX 1: iyms21 ≤ 22 ise dep IY bekleniyor → 1/1 değil 2/1 adayı
-        #        1/1 için iyms21 > 24 veya None olmalı
+        # PATCH 2: iy2 eşikleri genişletildi
+        iy2_safe = iy2 and iy2 >= 5.0   # dep IY kesin uzak — tam güven
+        iy2_ok   = iy2 and iy2 >= 3.5   # kabul edilebilir
+        iy2_warn = iy2 and iy2 < 3.5    # tehlikeli yakın (Adelaide vakası)
+
+        # PATCH 1: Chelsea blind spot guard
+        # ms1 ucuzladı + iyms22 için hiç baskı yok + dep IY tehdit
+        blind_spot_22 = (
+            ch_ms1 is not None and ch_ms1 <= 0 and
+            (ch_iyms22 is None or ch_iyms22 >= 0) and
+            iy2 is not None and iy2 >= 3.0 and
+            ms1 is not None and ms1 >= 1.60
+        )
+
+        # v9 guard (korundu)
         iyms21_safe = (iyms21 is None or iyms21 > 24)
 
         if ch_iy1ok and iyms21_safe:
@@ -387,9 +377,17 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
                 tier  = 'STANDART' if dep_ft_hi else 'PREMIER'
                 note  = ''
                 lift  = 1.92
-                if dep_ft_hi: lift = 1.60; note += ' ⚠DEP_FT≥3'
-                if not iy2_str: lift = lift * 0.85; note += ' ⚠IY2<5.0'
-                sig('1/1', f'v9: 1/1 Ev Hakimiyeti — ev FT↓+dep FT↑+IYMS21>{24 if iyms21 else "?"}{note}',
+                if dep_ft_hi:
+                    lift = 1.60; note += ' ⚠DEP_FT≥3'
+                # PATCH 2: iy2 guard sertleştirildi
+                if iy2_warn:
+                    lift = lift * 0.55; note += ' ⚠IY2<3.5(2/1risk)'
+                elif not iy2_safe:
+                    lift = lift * 0.85; note += ' ⚠IY2<5.0'
+                # PATCH 1: blind spot düşürme
+                if blind_spot_22:
+                    lift = lift * 0.65; note += ' ⚠DEP-KÖR(2/2risk)'
+                sig('1/1', f'v10: 1/1 Ev Hakimiyeti — ev FT↓+dep FT↑+IYMS21>{24 if iyms21 else "?"}{note}',
                     5.5, lift, tier=tier)
 
         if (ch_iy1ok and ch_sy1ok and ch_ms1ok and iyms21_safe):
@@ -397,42 +395,45 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
                 tier  = 'STANDART' if dep_ft_hi else 'PREMIER'
                 note  = ''
                 lift  = 2.17
-                if dep_ft_hi: lift = 1.80; note += ' ⚠DEP_FT≥3'
-                if not iy2_str: lift = lift * 0.85; note += ' ⚠IY2<5.0'
-                sig('1/1', f'v9: 1/1 TAM HAKİMİYET — IY+2Y+MS ev↓+IYMS21>{24 if iyms21 else "?"}{note}',
+                if dep_ft_hi:
+                    lift = 1.80; note += ' ⚠DEP_FT≥3'
+                # PATCH 2
+                if iy2_warn:
+                    lift = lift * 0.55; note += ' ⚠IY2<3.5(2/1risk)'
+                elif not iy2_safe:
+                    lift = lift * 0.85; note += ' ⚠IY2<5.0'
+                # PATCH 1
+                if blind_spot_22:
+                    lift = lift * 0.65; note += ' ⚠DEP-KÖR(2/2risk)'
+                sig('1/1', f'v10: 1/1 TAM HAKİMİYET — IY+2Y+MS ev↓+IYMS21>{24 if iyms21 else "?"}{note}',
                     6.2, lift, tier=tier)
 
-    # ── v9 YENİ: EV_FT≤-3 + DEP_FT≥2 + iyms21 ≤ 22: gri bölge her iki sinyal ──
-    # 22 ≤ iyms21 ≤ 24: hem 1/1 hem 2/1 mümkün, ikisi de standart
+    # Gri bölge (v9'dan korundu)
     if (is_ev_dominance and ev_ft_sum <= -3 and dep_ft_sum >= 2 and
             iyms21 and 22 <= iyms21 <= 24 and
             ms1 and ms1 <= 2.0 and has_change and ch_iyms21 == -1):
-        sig('1/1', 'v9: GRİ BÖLGE 1/1? (iyms21=22-24, EV↓↓)', 4.5, 1.57, tier='STANDART')
-        sig('2/1', 'v9: GRİ BÖLGE 2/1? (iyms21=22-24, EV↓↓+IYMS↓)', 4.0, 1.40, tier='STANDART')
+        sig('1/1', 'v10: GRİ BÖLGE 1/1? (iyms21=22-24, EV↓↓)', 4.5, 1.57, tier='STANDART')
+        sig('2/1', 'v10: GRİ BÖLGE 2/1? (iyms21=22-24, EV↓↓+IYMS↓)', 4.0, 1.40, tier='STANDART')
 
     # ══════════════════════════════════════════════════════════════════
-    # 2/2 DEP HAKİMİYETİ — v9 YENİ SİNYALLER EKLENDİ
+    # 2/2 DEP HAKİMİYETİ (v9'dan korundu)
     # ══════════════════════════════════════════════════════════════════
 
-    # v9 YENİ A: Doğal 2/2 — dep büyük favori, her yarı bekleniyor
-    # [Sampdoria: iyms22=3.0, ms2=1.9 | R.Sociedad: iyms22=2.74, ms2=1.81]
     if iyms22 and iyms22 <= 5.0 and ms2 and ms2 <= 2.5:
         note = ''
         lift = 1.80
         if ch_iyms22 is not None and ch_iyms22 == -1:
             lift = 2.10; note = ' + IYMS22↓'
-        sig('2/2', f'v9: 2/2 DOĞAL — IYMS22≤5 + MS2≤2.5{note}', 5.2, lift, tier='PREMIER' if lift >= 2.0 else 'STANDART')
+        sig('2/2', f'v10: 2/2 DOĞAL — IYMS22≤5 + MS2≤2.5{note}', 5.2, lift,
+            tier='PREMIER' if lift >= 2.0 else 'STANDART')
 
-    # v9 YENİ B: 2/2 Divergence — dep uzak ama piyasa 2/2 görüyor
-    # [Santa Fe: iyms22=8.68, ms2=4.75, ch_iyms22=-1]
     if (iyms22 and iyms22 <= 10 and
             has_change and ch_iyms22 == -1 and
             ms2 and ms2 <= 3.5 and
-            (ch_iyms12 is None or ch_iyms12 != -1)):  # 1/2 ile çakışmasın
-        sig('2/2', 'v9: 2/2 DİVERGENCE — IYMS22≤10 + ch22=-1 (piyasa dep her yarı gördü)',
+            (ch_iyms12 is None or ch_iyms12 != -1)):
+        sig('2/2', 'v10: 2/2 DİVERGENCE — IYMS22≤10 + ch22=-1',
             5.0, 1.74, tier='STANDART')
 
-    # v6 spesifik 2/2 (korundu)
     is_dep_dom_specific = (
         is_dep_dominance and
         (ch_iyms12 is None or ch_iyms12 != -1) and
@@ -454,7 +455,7 @@ def evaluate_reversal_signals(markets, changes, sofa_1x2):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# FİLTRELER
+# FİLTRELER (v9'dan korundu)
 # ─────────────────────────────────────────────────────────────────────
 
 def apply_filters(signals, age_hours, ev_ft_sum, dep_ft_sum,
@@ -489,7 +490,7 @@ def apply_filters(signals, age_hours, ev_ft_sum, dep_ft_sum,
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ANA FONKSİYON
+# ANA FONKSİYON (v9'dan korundu, sadece versiyon etiketi güncellendi)
 # ─────────────────────────────────────────────────────────────────────
 
 def generate_signals():
@@ -503,7 +504,7 @@ def generate_signals():
 
     skipped_no_odds = 0
     signals_found   = []
-    v9_cancelled    = 0
+    v10_cancelled   = 0
 
     for row in rows:
         raw = row.get('odds_data', {})
@@ -549,8 +550,8 @@ def generate_signals():
             raw_sigs, age_hours, ev_sum, dep_sum,
             ch_ms1, ch_ms2, ch_iy1, ch_iy2, ch_iyms21)
 
-        v9_cancelled += len(cancelled)
-        consistency  = market_consistency_score(changes, sigs, ev_sum, dep_sum)
+        v10_cancelled += len(cancelled)
+        consistency   = market_consistency_score(changes, sigs, ev_sum, dep_sum)
 
         n_elite   = sum(1 for s in sigs if s['tier'] == 'ELITE')
         n_premier = sum(1 for s in sigs if s['tier'] == 'PREMIER')
@@ -579,12 +580,12 @@ def generate_signals():
     ), reverse=True)
 
     print("=" * 72)
-    print(f"  ScorePop REVERSAL v9  |  {now_tr.strftime('%Y-%m-%d %H:%M')} TR")
+    print(f"  ScorePop REVERSAL v10  |  {now_tr.strftime('%Y-%m-%d %H:%M')} TR")
     print("=" * 72)
     print(f"  Taranan          : {len(rows)}")
     print(f"  Oran yok         : {skipped_no_odds}")
     print(f"  LİSTEDE          : {len(signals_found)}")
-    print(f"  v9 iptal         : {v9_cancelled}")
+    print(f"  v10 iptal        : {v10_cancelled}")
     print("=" * 72)
 
     if not signals_found:
@@ -631,7 +632,7 @@ def generate_signals():
 
     print(f"\n{'='*72}")
     print(f"  {len(elite_list)} ELITE + {len(premier_list)} PREMIER + {len(std_list)} STANDART")
-    print(f"  v9: {v9_cancelled} sinyal iptal")
+    print(f"  v10: {v10_cancelled} sinyal iptal")
     print(f"{'='*72}")
 
 if __name__ == "__main__":
