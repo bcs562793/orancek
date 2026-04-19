@@ -44,7 +44,7 @@
     },
     "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_low|au25_med": {
       "2/2": {
-        "count": 2,
+        "count": 3,
         "firstSeen": "2026-04-19T07:00:08.011Z"
       },
       "X/2": {
@@ -84,6 +84,10 @@
       "1/2": {
         "count": 1,
         "firstSeen": "2026-04-19T16:54:53.281Z"
+      },
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T17:54:53.299Z"
       }
     },
     "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
@@ -94,6 +98,10 @@
       "X/X": {
         "count": 1,
         "firstSeen": "2026-04-19T09:25:09.581Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T17:54:53.299Z"
       }
     },
     "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_vhigh": {
@@ -147,8 +155,14 @@
         "count": 1,
         "firstSeen": "2026-04-19T17:49:52.824Z"
       }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-19T17:54:53.299Z"
+      }
     }
   },
   "version": 2,
-  "totalLearned": 30
+  "totalLearned": 34
 }
