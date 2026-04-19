@@ -880,4 +880,19 @@ async function main() {
   console.log('╚══════════════════════════════════════════════════════════╝');
 }
 
+process.on('SIGINT', () => {
+  console.log('\n[Sistem] 🛑 Kapanma sinyali (Ctrl+C) alındı!');
+  console.log('[Sistem] RAM\'deki veriler diske (JSON) kaydediliyor, lütfen bekleyin...');
+  saveCache();
+  console.log('[Sistem] ✅ Memory ve Cache başarıyla kurtarıldı. Kapanıyor.');
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n[Sistem] 🛑 Sunucu kapanma sinyali aldı!');
+  saveCache();
+  console.log('[Sistem] ✅ Veriler kaydedildi. Kapanıyor.');
+  process.exit(0);
+});
+
 main().catch(e => { console.error('[FATAL]', e); process.exit(1); });
