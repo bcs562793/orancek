@@ -682,6 +682,7 @@ async function syncLiveMatches() {
 
     matchedLive++;
     const match    = matchCache.get(fid);
+    if (!match) continue;
     const prevLive = match.liveData || {};
 
     // Aynı statüde tekrar işleme (FT hariç)
