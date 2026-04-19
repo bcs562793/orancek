@@ -1,25 +1,24 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v2.1
+ * ai_tracker.js — ScorePop Adaptive Tracker v2.2
  * ═══════════════════════════════════════════════════════════════════
  * Nesine'den oran çeker → Özellik vektörü çıkarır → Durum kodu üretir →
  * Tarihsel hafızaya sorar → Olasılık/Lift hesaplar → Sinyal üretir.
  * Maç bittiğinde gerçek sonucu hafızaya işleyerek kendi kendini günceller.
  *
- * v2.1 Değişiklikleri:
+ * v2.2 Değişiklikleri:
  *  - [FIX-1] syncLiveMatches: Debug log eklendi (ID eşleşmesi, örnek satır)
- *  - [FIX-2] Bootstrap sinyal modu: 20 maç öğrenene kadar kural tabanlı sinyal üretimi
- *  - [FIX-3] live_matches HT skoru ht_home_score / ht_away_score sütunlarından da okunuyor
+ *  - [FIX-2] Bootstrap sinyal modu: 20 maç öğrenene kadar kural tabanlı sinyal
+ *  - [FIX-3] HT skoru: '1H'→'HT' geçişinde home_score/away_score yakalanır.
+ *            FT'de prevLive.htHome/htAway'den okunur. Özel DB sütunu YOK.
  *  - [FIX-4] evaluateSmartSignals: histCount alanı signals nesnesine eklendi
  *
  * Ortam değişkenleri:
- * SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_TO
- * INTERVAL_MS (5dk), MAX_RUNTIME_MS (4.75sa), LOOKAHEAD_HOURS (8)
- * CACHE_FILE          — tracker_cache.json
- * FIRED_FILE          — fired_alerts.json
- * MEMORY_FILE         — learned_memory.json
- * DRY_RUN
- * SUPABASE_URL, SUPABASE_KEY
- * BOOTSTRAP_THRESHOLD — Kaç maç öğrenene kadar bootstrap sinyali kullanılsın (varsayılan 20)
+ *   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_TO
+ *   INTERVAL_MS (5dk), MAX_RUNTIME_MS (4.75sa), LOOKAHEAD_HOURS (8)
+ *   CACHE_FILE, FIRED_FILE, MEMORY_FILE
+ *   DRY_RUN
+ *   SUPABASE_URL, SUPABASE_KEY
+ *   BOOTSTRAP_THRESHOLD — Kaç maç öğrenene kadar bootstrap (varsayılan 20)
  */
 'use strict';
 
@@ -28,7 +27,7 @@ const fs         = require('fs');
 const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 
-// ── Config ──────────────────────────────────────────────────────────
+// ── Config ───────────────────────────────────────────────────────────
 const INTERVAL_MS         = parseInt(process.env.INTERVAL_MS         || '300000');
 const MAX_RUNTIME_MS      = parseInt(process.env.MAX_RUNTIME_MS      || '17100000');
 const LOOKAHEAD_H         = parseInt(process.env.LOOKAHEAD_HOURS     || '8');
@@ -43,15 +42,14 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-// ── State ────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────
 const matchCache = new Map();
 let firedAlerts  = {};
 let memory       = { patterns: {}, version: 2, totalLearned: 0 };
 let cycleCount   = 0;
 const startTime  = Date.now();
 
-const HTFT_RESULTS  = ['1/1','1/X','1/2','X/1','X/X','X/2','2/1','2/X','2/2'];
-const FOCUS_RESULTS = ['1/1','2/1','2/2','1/2'];
+const FOCUS_RESULTS = ['1/1', '2/1', '2/2', '1/2'];
 
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 1 — CACHE & MEMORY
@@ -71,7 +69,7 @@ function loadCache() {
     try {
       memory = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
       if (!memory.patterns) memory = { patterns: {}, version: 2, totalLearned: memory.totalLearned || 0 };
-      console.log(`[Memory] ${Object.keys(memory.patterns).length} pattern yüklendi | Toplam öğrenilen: ${memory.totalLearned}`);
+      console.log(`[Memory] ${Object.keys(memory.patterns).length} pattern | Toplam öğrenilen: ${memory.totalLearned}`);
     } catch (e) { console.warn('[Memory] Yüklenemedi:', e.message); }
   }
 }
@@ -101,7 +99,7 @@ function fetchJSON(url) {
         'Accept-Encoding': 'identity',
         'Referer':         'https://www.nesine.com/',
         'Origin':          'https://www.nesine.com',
-        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/2.1)',
+        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/2.2)',
       }
     }, res => {
       let buf = '';
@@ -128,6 +126,15 @@ const TEAM_ALIASES = {
   'new york rb':    'ny red bulls',
   'fc midtjylland': 'midtjylland',
   'pacos de ferreira': 'p ferreira',
+  'seattle s':      'seattle sounders',
+  'st louis':       's louis city',
+  'gabala':         'kabala',
+  'rz pellets wac': 'wolfsberger',
+  'sw bregenz':     'schwarz weiss b',
+  'fc zurich':      'zurih',
+  'future fc':      'modern sport club',
+  'the new saints': 'tns',
+  'vancouver':      'v whitecaps',
 };
 
 function norm(s) {
@@ -151,15 +158,42 @@ function tokenSim(a, b) {
 }
 
 function findBestMatch(home, away, events) {
-  const THRESHOLD = 0.35;
-  let best = null, bestScore = THRESHOLD - 0.01;
+  const THRESHOLD    = 0.35;
+  const MIN_PER_TEAM = 0.20;
+  const ONE_SIDE_HIGH= 0.65;
+  const CROSS_MIN    = 0.25;
+
+  // Aşama 1: Normal eşleştirme
+  let bestNormal = null, bestNormalScore = THRESHOLD - 0.01;
   for (const ev of events) {
     const hs  = tokenSim(normA(home), norm(ev.HN));
     const as_ = tokenSim(normA(away), norm(ev.AN));
     const avg = (hs + as_) / 2;
-    if (hs >= 0.20 && as_ >= 0.20 && avg > bestScore) { bestScore = avg; best = ev; }
+    if (hs >= MIN_PER_TEAM && as_ >= MIN_PER_TEAM && avg > bestNormalScore) {
+      bestNormalScore = avg;
+      bestNormal = ev;
+    }
   }
-  return best ? { ev: best, score: bestScore } : null;
+  if (bestNormal) return { ev: bestNormal, score: bestNormalScore };
+
+  // Aşama 2: Çapraz eşleştirme
+  let bestCross = null, bestCrossScore = -1;
+  for (const ev of events) {
+    const combos = [
+      { s: tokenSim(normA(home), norm(ev.HN)), c: tokenSim(normA(away), norm(ev.AN)) },
+      { s: tokenSim(normA(away), norm(ev.HN)), c: tokenSim(normA(home), norm(ev.AN)) },
+    ];
+    for (const { s, c } of combos) {
+      if (s >= ONE_SIDE_HIGH && c >= CROSS_MIN) {
+        const confidence = (s + c) / 2;
+        if (confidence >= THRESHOLD && confidence > bestCrossScore) {
+          bestCrossScore = confidence;
+          bestCross = ev;
+        }
+      }
+    }
+  }
+  return bestCross ? { ev: bestCross, score: bestCrossScore } : null;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -202,8 +236,7 @@ function calcDelta(prev, curr) {
     const p = prev[k] || {}, c = curr[k] || {};
     for (const sub of Object.keys({ ...p, ...c })) {
       const pv = p[sub], cv = c[sub];
-      if (pv && cv && pv !== cv) ch[k][sub] = +(cv - pv).toFixed(3);
-      else ch[k][sub] = 0;
+      ch[k][sub] = (pv && cv && pv !== cv) ? +(cv - pv).toFixed(3) : 0;
     }
   }
   return ch;
@@ -222,6 +255,7 @@ function ftGroups(changes) {
 // BÖLÜM 6 — ÖZELLİK ÇIKARIMI & DURUM KODU
 // ════════════════════════════════════════════════════════════════════
 function bucket(val, thresholds, labels) {
+  if (val === null || val === undefined) return labels[labels.length - 1];
   for (let i = 0; i < thresholds.length; i++) if (val <= thresholds[i]) return labels[i];
   return labels[labels.length - 1];
 }
@@ -271,8 +305,8 @@ function extractFeatures(markets, changes, cumCache, snapshots) {
     depMomentum = depSlope < -1.5 ? 'falling' : depSlope > 1.5 ? 'rising' : 'stable';
   }
 
-  f.ev_momentum  = evMomentum;
-  f.dep_momentum = depMomentum;
+  f.ev_momentum   = evMomentum;
+  f.dep_momentum  = depMomentum;
   f.div_ev_to_dep = (f.ev_ft_sign === 'neg' && f.dep_ft_sign === 'pos') ? 'yes' : 'no';
   f.div_strong_ev = (f.ev_ft_sign === 'neg' && f.dep_ft_sign === 'neg') ? 'yes' : 'no';
 
@@ -308,7 +342,7 @@ function learnFromMatch(fixtureId, actualHtFt) {
 
   const lastSnap = match.snapshots[match.snapshots.length - 1];
   if (!lastSnap._stateKey) {
-    console.warn(`[Learn] ${fixtureId} son snapshot'ta _stateKey yok, öğrenme atlandı`);
+    console.warn(`[Learn] fixture=${fixtureId} _stateKey yok, öğrenme atlandı`);
     return;
   }
 
@@ -319,7 +353,7 @@ function learnFromMatch(fixtureId, actualHtFt) {
   }
   memory.patterns[key][actualHtFt].count++;
   memory.totalLearned++;
-  console.log(`[Learn] "${key}" → ${actualHtFt} (yeni sayı: ${memory.patterns[key][actualHtFt].count})`);
+  console.log(`[Learn] "${key}" → ${actualHtFt} (sayı: ${memory.patterns[key][actualHtFt].count})`);
 }
 
 function predict(stateKey) {
@@ -339,7 +373,7 @@ function predict(stateKey) {
     const lift = prob / baseProb;
     let confidence = 'low';
     if (total >= 10 && prob >= 0.30) confidence = 'high';
-    else if (total >= 5  && prob >= 0.20) confidence = 'medium';
+    else if (total >= 5 && prob >= 0.20) confidence = 'medium';
     result[r] = { prob: +prob.toFixed(3), lift: +lift.toFixed(2), count: cnt, total, confidence };
   }
   return result;
@@ -396,85 +430,43 @@ function predictWithSimilarity(stateKey) {
 // BÖLÜM 8 — AKILLI SİNYAL MOTORU
 // ════════════════════════════════════════════════════════════════════
 function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
-  const features  = extractFeatures(markets, changes, cumCache, snapshots);
-  const stateKey  = generateStateKey(features);
-  const raw       = features.raw;
-  const b         = features.buckets;
+  const features = extractFeatures(markets, changes, cumCache, snapshots);
+  const stateKey = generateStateKey(features);
+  const raw      = features.raw;
+  const b        = features.buckets;
 
-  // stateKey'i son snapshot'a yaz (öğrenme için)
+  // stateKey'i son snapshot'a yaz (öğrenme için kritik)
   if (snapshots.length > 0) snapshots[snapshots.length - 1]._stateKey = stateKey;
 
   const predictions = predictWithSimilarity(stateKey);
   const signals     = [];
 
-  // Trend gücü
   const trendStrength =
     (b.ev_momentum === 'falling' && b.dep_momentum === 'rising') ? 'strong_reversal' :
     (b.ev_momentum === 'falling')                                 ? 'ev_dominant'     :
     (b.dep_momentum === 'falling')                                ? 'dep_dominant'    : 'neutral';
 
-  // ── [FIX-2] Bootstrap modu: yeterli hafıza yokken kural tabanlı sinyaller ─────
+  // ── [FIX-2] Bootstrap: yeterli hafıza yokken kural tabanlı ──────────
   const hasMemory = memory.totalLearned >= BOOTSTRAP_THRESHOLD;
 
   if (!hasMemory) {
     const evCum  = cumCache.ev_ft_cum  || 0;
     const depCum = cumCache.dep_ft_cum || 0;
 
-    if (raw.iyms21 && raw.iyms21 <= 12 && evCum <= -4) {
-      signals.push({
-        type:          '2/1',
-        tier:          'STANDART',
-        rule:          `[BOOTSTRAP] İYMS21=${raw.iyms21} | ev_cum=${evCum}`,
-        prec:          5.0,
-        lift:          1.5,
-        prob:          0.15,
-        stateKey,
-        trendStrength: 'bootstrap',
-        histCount:     0,
-      });
-    }
-    if (raw.ms1 && raw.ms1 <= 1.50 && evCum <= -3) {
-      signals.push({
-        type:          '1/1',
-        tier:          'STANDART',
-        rule:          `[BOOTSTRAP] MS1=${raw.ms1} | ev_cum=${evCum}`,
-        prec:          5.0,
-        lift:          1.4,
-        prob:          0.14,
-        stateKey,
-        trendStrength: 'bootstrap',
-        histCount:     0,
-      });
-    }
-    if (raw.iyms22 && raw.iyms22 <= 6 && depCum <= -3) {
-      signals.push({
-        type:          '2/2',
-        tier:          'STANDART',
-        rule:          `[BOOTSTRAP] İYMS22=${raw.iyms22} | dep_cum=${depCum}`,
-        prec:          5.0,
-        lift:          1.4,
-        prob:          0.14,
-        stateKey,
-        trendStrength: 'bootstrap',
-        histCount:     0,
-      });
-    }
-    if (raw.iyms12 && raw.iyms12 <= 12 && depCum <= -4) {
-      signals.push({
-        type:          '1/2',
-        tier:          'STANDART',
-        rule:          `[BOOTSTRAP] İYMS12=${raw.iyms12} | dep_cum=${depCum}`,
-        prec:          5.0,
-        lift:          1.4,
-        prob:          0.14,
-        stateKey,
-        trendStrength: 'bootstrap',
-        histCount:     0,
-      });
-    }
+    if (raw.iyms21 && raw.iyms21 <= 12 && evCum <= -4)
+      signals.push({ type: '2/1', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS21=${raw.iyms21} ev_cum=${evCum}`, prec: 5.0, lift: 1.5, prob: 0.15, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+
+    if (raw.ms1 && raw.ms1 <= 1.50 && evCum <= -3)
+      signals.push({ type: '1/1', tier: 'STANDART', rule: `[BOOTSTRAP] MS1=${raw.ms1} ev_cum=${evCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+
+    if (raw.iyms22 && raw.iyms22 <= 6 && depCum <= -3)
+      signals.push({ type: '2/2', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS22=${raw.iyms22} dep_cum=${depCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+
+    if (raw.iyms12 && raw.iyms12 <= 12 && depCum <= -4)
+      signals.push({ type: '1/2', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS12=${raw.iyms12} dep_cum=${depCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0 });
   }
 
-  // ── Normal pattern tabanlı sinyaller ────────────────────────────
+  // ── Pattern tabanlı sinyaller ───────────────────────────────────────
   for (const outcome of FOCUS_RESULTS) {
     const p = predictions[outcome];
     if (p.lift < 1.20) continue;
@@ -484,20 +476,14 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
     let precision = p.prob * 10;
 
     if (p.lift >= 2.50 && p.confidence === 'high') {
-      tier      = 'ELITE';
-      precision = Math.min(9.5, p.prob * 10 + 2);
+      tier = 'ELITE'; precision = Math.min(9.5, p.prob * 10 + 2);
     } else if (p.lift >= 2.00 && (p.confidence === 'high' || p.confidence === 'medium')) {
-      tier      = 'PREMIER';
-      precision = Math.min(8.5, p.prob * 10 + 1);
-    } else if (p.lift >= 1.60) {
-      tier      = 'STANDART';
-      precision = p.prob * 10;
+      tier = 'PREMIER'; precision = Math.min(8.5, p.prob * 10 + 1);
     }
 
-    if (outcome === '2/1' && trendStrength === 'strong_reversal') { precision += 0.8; rule = 'Reversal momentum + ' + rule; }
-    if (outcome === '1/1' && trendStrength === 'ev_dominant')      { precision += 0.6; rule = 'Ev dominance + ' + rule; }
-    if (outcome === '2/2' && trendStrength === 'dep_dominant')     { precision += 0.6; rule = 'Dep dominance + ' + rule; }
-
+    if (outcome === '2/1' && trendStrength === 'strong_reversal') { precision += 0.8; rule = 'Reversal + ' + rule; }
+    if (outcome === '1/1' && trendStrength === 'ev_dominant')      { precision += 0.6; rule = 'Ev dom + ' + rule; }
+    if (outcome === '2/2' && trendStrength === 'dep_dominant')     { precision += 0.6; rule = 'Dep dom + ' + rule; }
     if (outcome === '2/1' && raw.ev_ft <= -3 && raw.dep_ft >= 2)  precision += 0.5;
     if (outcome === '1/1' && raw.ev_ft <= -2 && raw.dep_ft >= 1)  precision += 0.4;
     if (outcome === '2/2' && raw.dep_ft <= -2)                    precision += 0.4;
@@ -506,15 +492,12 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
     if (p.prob < minProb) continue;
 
     signals.push({
-      type:          outcome,
-      tier,
-      rule:          `${rule} | hist=${p.count}/${p.total}`,
-      prec:          +precision.toFixed(2),
-      lift:          p.lift,
-      prob:          p.prob,
-      stateKey,
-      trendStrength,
-      histCount:     p.count,  // [FIX-4] histCount eklendi
+      type: outcome, tier,
+      rule: `${rule} | hist=${p.count}/${p.total}`,
+      prec: +precision.toFixed(2),
+      lift: p.lift, prob: p.prob,
+      stateKey, trendStrength,
+      histCount: p.count,
     });
   }
 
@@ -525,7 +508,7 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 9 — YEREL YORUM ÜRETİCİ
+// BÖLÜM 9 — YEREL YORUM
 // ════════════════════════════════════════════════════════════════════
 function generateLocalInterpretation(matchData) {
   const { signals, features, predictions, stateKey } = matchData;
@@ -535,27 +518,21 @@ function generateLocalInterpretation(matchData) {
   const f   = features.buckets;
   const r   = features.raw;
 
-  let marketNarrative = '';
-  if (f.div_ev_to_dep === 'yes')   marketNarrative = 'Piyasada ev/dep FT reversal baskısı var. ';
-  else if (f.div_strong_ev === 'yes') marketNarrative = 'Her iki yarıda ev güçleniyor. ';
-  else                              marketNarrative = 'Piyasa hareketi karışık yönlü. ';
-  if (f.ev_momentum  === 'falling') marketNarrative += 'Ev FT oranları düşüyor (para girişi). ';
-  if (f.dep_momentum === 'rising')  marketNarrative += 'Dep FT oranları yükseliyor (para çıkışı). ';
+  let mkt = '';
+  if (f.div_ev_to_dep === 'yes')      mkt = 'Piyasada ev/dep FT reversal baskısı var. ';
+  else if (f.div_strong_ev === 'yes') mkt = 'Her iki yarıda ev güçleniyor. ';
+  else                                mkt = 'Piyasa hareketi karışık yönlü. ';
+  if (f.ev_momentum  === 'falling') mkt += 'Ev FT oranları düşüyor (para girişi). ';
+  if (f.dep_momentum === 'rising')  mkt += 'Dep FT oranları yükseliyor (para çıkışı). ';
 
   const hist = predictions[top.type];
-  let historicalNote = '';
-  if (hist.total >= 10) historicalNote = `Bu pattern geçmişte ${hist.total} kez tekrarlandı, ${hist.count} kez ${top.type} geldi (%${(hist.prob * 100).toFixed(0)}).`;
-  else if (hist.total >= 3) historicalNote = `Sınırlı örnek (${hist.total}) ama eğilim ${top.type} yönünde.`;
-  else if (top.trendStrength === 'bootstrap') historicalNote = `[Bootstrap] Kural tabanlı sinyal — hafıza henüz yeterli değil (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD}).`;
-  else historicalNote = 'Yeni pattern, temkinli olun.';
+  let note = '';
+  if      (hist.total >= 10)                    note = `Bu pattern ${hist.total} kez tekrarlandı, ${hist.count} kez ${top.type} geldi (%${(hist.prob*100).toFixed(0)}).`;
+  else if (hist.total >= 3)                     note = `Sınırlı örnek (${hist.total}) ama eğilim ${top.type} yönünde.`;
+  else if (top.trendStrength === 'bootstrap')   note = `[Bootstrap] Kural tabanlı sinyal — hafıza: ${memory.totalLearned}/${BOOTSTRAP_THRESHOLD}.`;
+  else                                          note = 'Yeni pattern, temkinli olun.';
 
-  return `
-📊 DURUM KODU: ${stateKey.substring(0, 55)}...
-${marketNarrative}
-🎯 TAHMİN: ${top.type} | Güven: ${top.tier} | Lift: ${top.lift}x | Olasılık: %${(top.prob * 100).toFixed(1)}
-📚 ${historicalNote}
-⚡ Trend: ${top.trendStrength} | Son İYMS21: ${r.iyms21 || '?'} | MS1: ${r.ms1 || '?'}
-`.trim();
+  return `📊 DURUM: ${stateKey.substring(0, 55)}...\n${mkt}\n🎯 TAHMİN: ${top.type} | ${top.tier} | Lift: ${top.lift}x | Olas: %${(top.prob*100).toFixed(1)}\n📚 ${note}\n⚡ Trend: ${top.trendStrength} | İYMS21: ${r.iyms21||'?'} | MS1: ${r.ms1||'?'}`;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -571,89 +548,62 @@ function createTransport() {
 }
 
 function buildEmailHTML(matchesWithSignals, cycleNo) {
-  const now        = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
-  const tierColor  = { ELITE: '#c0392b', PREMIER: '#e67e22', STANDART: '#2980b9' };
-  const typeEmoji  = { '1/1': '🟡', '2/2': '🟣', '2/1': '🟢', '1/2': '🔵' };
+  const now       = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+  const tierColor = { ELITE: '#c0392b', PREMIER: '#e67e22', STANDART: '#2980b9' };
+  const typeEmoji = { '1/1': '🟡', '2/2': '🟣', '2/1': '🟢', '1/2': '🔵' };
 
   const matchBlocks = matchesWithSignals.map(m => {
     const top     = m.signals[0];
     const allSigs = m.signals.slice(0, 3).map(s =>
-      `<span style="display:inline-block;background:${tierColor[s.tier]};color:#fff;padding:3px 8px;border-radius:4px;font-size:12px;margin:2px;">
-        ${s.type} %${(s.prob * 100).toFixed(0)} (lift ${s.lift}x)
-      </span>`
+      `<span style="display:inline-block;background:${tierColor[s.tier]};color:#fff;padding:3px 8px;border-radius:4px;font-size:12px;margin:2px;">${s.type} %${(s.prob*100).toFixed(0)} (lift ${s.lift}x)</span>`
     ).join(' ');
 
     const localInsight = m.interpretation
-      ? `<div style="background:#f8f9fa;border-left:3px solid ${tierColor[top.tier]};padding:10px;margin-top:8px;font-size:12px;color:#444;white-space:pre-wrap;">${m.interpretation.replace(/\n/g, '<br>')}</div>`
+      ? `<div style="background:#f8f9fa;border-left:3px solid ${tierColor[top.tier]};padding:10px;margin-top:8px;font-size:12px;color:#444;white-space:pre-wrap;">${m.interpretation.replace(/\n/g,'<br>')}</div>`
       : '';
 
     const feat = m.features?.buckets;
-    const momentumBars = `
-      <div style="margin-top:6px;font-size:11px;color:#666;">
-        <span style="color:${feat.ev_momentum  === 'falling' ? '#e74c3c' : '#27ae60'}">● Ev FT: ${feat.ev_ft_sign} (${feat.ev_momentum})</span> &nbsp;|&nbsp;
-        <span style="color:${feat.dep_momentum === 'rising'  ? '#e74c3c' : '#27ae60'}">● Dep FT: ${feat.dep_ft_sign} (${feat.dep_momentum})</span>
-      </div>`;
+    const momentumBars = `<div style="margin-top:6px;font-size:11px;color:#666;">
+      <span style="color:${feat.ev_momentum==='falling'?'#e74c3c':'#27ae60'}">● Ev FT: ${feat.ev_ft_sign} (${feat.ev_momentum})</span>&nbsp;|&nbsp;
+      <span style="color:${feat.dep_momentum==='rising'?'#e74c3c':'#27ae60'}">● Dep FT: ${feat.dep_ft_sign} (${feat.dep_momentum})</span></div>`;
 
-    const bootstrapBadge = (top.trendStrength === 'bootstrap')
-      ? `<span style="background:#95a5a6;color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;margin-left:4px;">BOOTSTRAP</span>`
-      : '';
+    const bootstrapBadge = top.trendStrength === 'bootstrap'
+      ? `<span style="background:#95a5a6;color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;margin-left:4px;">BOOTSTRAP</span>` : '';
 
-    return `
-    <div style="border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:14px;background:#fff;">
+    return `<div style="border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:14px;background:#fff;">
       <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-weight:bold;font-size:15px;color:#2c3e50;">${typeEmoji[top.type] || '⚪'} ${m.name}${bootstrapBadge}</div>
-        <div style="font-size:12px;color:#7f8c8d;">${m.h2k < 1 ? '⏳ Başladı / Başlayacak' : '🔜 ' + m.h2k.toFixed(1) + ' saat'}</div>
+        <div style="font-weight:bold;font-size:15px;color:#2c3e50;">${typeEmoji[top.type]||'⚪'} ${m.name}${bootstrapBadge}</div>
+        <div style="font-size:12px;color:#7f8c8d;">${m.h2k < 1 ? '⏳ Başladı' : '🔜 '+m.h2k.toFixed(1)+' saat'}</div>
       </div>
       <div style="margin:8px 0;">${allSigs}</div>
       ${momentumBars}
       <div style="margin-top:6px;font-size:11px;color:#555;">
-        Hafıza: ${top.histCount || 0} örnek | Durum: <code style="background:#ecf0f1;padding:2px 4px;border-radius:3px;">${top.stateKey?.substring(0, 40)}...</code>
+        Hafıza: ${top.histCount||0} örnek | <code style="background:#ecf0f1;padding:2px 4px;border-radius:3px;">${top.stateKey?.substring(0,40)}...</code>
       </div>
-      ${localInsight}
-    </div>`;
+      ${localInsight}</div>`;
   }).join('');
 
-  const memStats = Object.values(memory.patterns).reduce((acc, p) => {
-    const t = FOCUS_RESULTS.reduce((s, r) => s + (p[r]?.count || 0), 0);
-    if (t > 0) { acc.patterns++; acc.totalSamples += t; }
+  const memStats = Object.values(memory.patterns).reduce((acc,p) => {
+    const t = FOCUS_RESULTS.reduce((s,r) => s+(p[r]?.count||0),0);
+    if(t>0){ acc.patterns++; acc.totalSamples+=t; }
     return acc;
-  }, { patterns: 0, totalSamples: 0 });
+  },{ patterns:0, totalSamples:0 });
 
-  const bootstrapWarning = !( memory.totalLearned >= BOOTSTRAP_THRESHOLD)
-    ? `<div style="background:#d5f5e3;border-left:4px solid #2ecc71;padding:12px;margin-bottom:16px;font-size:12px;border-radius:4px;">
-        🌱 <b>Bootstrap modu aktif</b> — Sistem ${memory.totalLearned}/${BOOTSTRAP_THRESHOLD} maç öğrendi.
-        Kural tabanlı sinyaller de dahil edilmektedir.
-      </div>`
-    : '';
+  const bootstrapWarning = !(memory.totalLearned >= BOOTSTRAP_THRESHOLD)
+    ? `<div style="background:#d5f5e3;border-left:4px solid #2ecc71;padding:12px;margin-bottom:16px;font-size:12px;border-radius:4px;">🌱 <b>Bootstrap modu aktif</b> — ${memory.totalLearned}/${BOOTSTRAP_THRESHOLD} maç öğrenildi.</div>` : '';
 
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>ScorePop Adaptive Alarm</title></head>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>ScorePop</title></head>
 <body style="font-family:'Segoe UI',Arial,sans-serif;max-width:800px;margin:0 auto;padding:16px;background:#f5f6fa;color:#2c3e50;">
   <div style="background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);color:#fff;padding:22px;border-radius:10px;margin-bottom:18px;">
-    <h1 style="margin:0;font-size:20px;">🧠 ScorePop Adaptive — Piyasa Öğrenme Motoru v2.1</h1>
-    <p style="margin:6px 0 0;opacity:.85;font-size:13px;">Döngü #${cycleNo} | ${now} | Hafızada ${memStats.patterns} pattern, ${memStats.totalSamples} örnek</p>
+    <h1 style="margin:0;font-size:20px;">🧠 ScorePop Adaptive — v2.2</h1>
+    <p style="margin:6px 0 0;opacity:.85;font-size:13px;">Döngü #${cycleNo} | ${now} | ${memStats.patterns} pattern | ${memStats.totalSamples} örnek</p>
   </div>
-
-  <div style="background:#fff3cd;border-left:4px solid #f0ad4e;padding:12px;margin-bottom:16px;font-size:12px;border-radius:4px;">
-    💡 Bu sinyaller <b>tamamen yerel öğrenme verilerine</b> dayanır. Claude/ChatGPT kullanılmaz. Her sonuç sistemin hafızasını güçlendirir.
-  </div>
-
   ${bootstrapWarning}
-
-  <p style="color:#7f8c8d;font-size:13px;margin-bottom:12px;">
-    <b>${matchesWithSignals.length}</b> maçta güçlü istatistiksel sapma tespit edildi.
-  </p>
-
+  <p style="color:#7f8c8d;font-size:13px;margin-bottom:12px;"><b>${matchesWithSignals.length}</b> maçta sinyal tespit edildi.</p>
   ${matchBlocks}
-
-  <div style="background:#ffeaa7;padding:12px;border-radius:6px;font-size:11px;margin-top:8px;">
-    ⚠️ Sistem geçmiş oran hareketleri ile sonuçları eşleştirerek olasılık üretir. Yüksek lift = piyasa ortalamasına göre aşım.
-    Her zaman kendi değerlendirmenizi yapın.
-  </div>
-  <p style="font-size:11px;color:#bdc3c7;margin-top:10px;text-align:right;">ScorePop Adaptive v2.1 | Self-Learning Engine</p>
-</body>
-</html>`;
+  <div style="background:#ffeaa7;padding:12px;border-radius:6px;font-size:11px;margin-top:8px;">⚠️ Sistem oran hareketleri ile sonuçları eşleştirerek olasılık üretir. Her zaman kendi değerlendirmenizi yapın.</div>
+  <p style="font-size:11px;color:#bdc3c7;margin-top:10px;text-align:right;">ScorePop Adaptive v2.2</p>
+</body></html>`;
 }
 
 async function sendEmail(subject, html) {
@@ -661,39 +611,44 @@ async function sendEmail(subject, html) {
   if (!to) { console.warn('[Mail] MAIL_TO tanımlı değil'); return false; }
   if (DRY_RUN) { console.log(`[DRY_RUN] Mail atılmadı: ${subject}`); return true; }
   try {
-    const info = await createTransport().sendMail({
-      from: `"ScorePop AI" <${process.env.SMTP_USER}>`,
-      to, subject, html,
-    });
-    console.log(`[Mail] ✅ Gönderildi → ${to} (${info.messageId})`);
+    const info = await createTransport().sendMail({ from: `"ScorePop AI" <${process.env.SMTP_USER}>`, to, subject, html });
+    console.log(`[Mail] ✅ ${to} (${info.messageId})`);
     return true;
   } catch (e) { console.error('[Mail] Hata:', e.message); return false; }
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 11 — MAÇ LİSTESİ (Supabase)
+// BÖLÜM 11 — MAÇ LİSTESİ
 // ════════════════════════════════════════════════════════════════════
 async function loadFixtures() {
   if (!sb) { console.warn('[Fixtures] Supabase bağlantısı yok'); return []; }
   try {
-    console.log('[Fixtures] Supabase "future_matches" tablosu okunuyor...');
+    console.log('[Fixtures] Supabase "future_matches" okunuyor...');
     const { data, error } = await sb.from('future_matches').select('*');
-    if (error) { console.error('[Fixtures] Supabase Okuma Hatası:', error.message); return []; }
-    if (!data || data.length === 0) { console.log('[Fixtures] Veritabanında izlenecek maç bulunamadı.'); return []; }
+    if (error) { console.error('[Fixtures] Hata:', error.message); return []; }
+    if (!data || data.length === 0) { console.log('[Fixtures] Maç bulunamadı.'); return []; }
     return data.map(r => ({
       fixture_id: String(r.fixture_id || r.id),
       home_team:  r.home_team || r.data?.teams?.home?.name || '',
       away_team:  r.away_team || r.data?.teams?.away?.name || '',
       kickoff:    r.date || r.kickoff || null,
     })).filter(r => r.home_team && r.away_team);
-  } catch (e) { console.error('[Fixtures] Beklenmeyen Hata:', e.message); return []; }
+  } catch (e) { console.error('[Fixtures] Hata:', e.message); return []; }
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 12 — CANLI SKOR & ÖĞRENME DÖNGÜSÜ [FIX-1 & FIX-3]
+// BÖLÜM 12 — CANLI SKOR & ÖĞRENME [FIX-3]
+//
+// ─── Geçiş mantığı (odds-tracker.js ile birebir) ───────────────────
+//   '1H'           → durum kaydet, skor kaydetme
+//   '1H'/'2H'→'HT' → o anki home_score/away_score = HT skoru → kaydet
+//   'HT'/'2H'→'FT' → FT skoru al + prevLive.htHome/htAway'den HT oku → öğren
+//
+// live_matches sütunları: fixture_id, status_short, home_score, away_score
+// Özel ht_home_score / ht_away_score sütununa GEREK YOK.
 // ════════════════════════════════════════════════════════════════════
 function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
-  if (htHome === null || htHome === undefined || ftHome === null || ftHome === undefined) return null;
+  if (htHome == null || ftHome == null) return null;
   const ht = htHome > htAway ? '1' : htHome < htAway ? '2' : 'X';
   const ft = ftHome > ftAway ? '1' : ftHome < ftAway ? '2' : 'X';
   return `${ht}/${ft}`;
@@ -701,35 +656,32 @@ function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
 
 async function syncLiveMatches() {
   if (!sb) return;
+
   let liveRows;
   try {
-    // [FIX-3] ht_home_score & ht_away_score sütunları da çekiliyor
+    // [FIX-3] Sadece mevcut sütunlar — özel HT sütunu YOK
     const { data, error } = await sb
       .from('live_matches')
-      .select('fixture_id, status_short, home_score, away_score, ht_home_score, ht_away_score')
+      .select('fixture_id, status_short, home_score, away_score')
       .in('status_short', ['1H', 'HT', '2H', 'FT']);
     if (error) { console.error('[Live] Supabase hata:', error.message); return; }
     liveRows = data || [];
   } catch (e) { console.error('[Live] Hata:', e.message); return; }
 
-  // [FIX-1] Debug: Tabloda ne var?
-  console.log(`[Live] Tabloda ${liveRows.length} canlı maç bulundu`);
-  if (liveRows.length > 0) {
-    console.log('[Live] Örnek satır:', JSON.stringify(liveRows[0]));
-  }
+  // [FIX-1] Debug
+  console.log(`[Live] ${liveRows.length} aktif/biten maç`);
+  if (liveRows.length > 0) console.log('[Live] Örnek:', JSON.stringify(liveRows[0]));
 
   let matchedLive = 0, learnedCount = 0;
 
   for (const row of liveRows) {
-    const fid     = String(row.fixture_id);
-    const inCache = matchCache.has(fid);
+    const fid    = String(row.fixture_id);
+    const status = row.status_short;
+    const hScore = row.home_score ?? null;
+    const aScore = row.away_score ?? null;
 
-    // [FIX-1] Eşleşmeyen ID'leri logla
-    if (!inCache) {
-      // Her döngüde çok kalabalık olmasın diye sadece FT olanları logla
-      if (row.status_short === 'FT') {
-        console.log(`[Live] Cache'de YOK (FT): fixture_id=${fid} | skor ${row.home_score}-${row.away_score}`);
-      }
+    if (!matchCache.has(fid)) {
+      if (status === 'FT') console.log(`[Live] Cache'de YOK (FT): fixture_id=${fid} | ${hScore}-${aScore}`);
       continue;
     }
 
@@ -737,43 +689,48 @@ async function syncLiveMatches() {
     const match    = matchCache.get(fid);
     const prevLive = match.liveData || {};
 
-    if (prevLive.status === row.status_short && row.status_short !== 'FT') continue;
+    // Aynı statüde tekrar işleme (FT hariç)
+    if (prevLive.status === status && status !== 'FT') continue;
 
-    let { htHome, htAway, ftHome, ftAway, htFtResult } = prevLive;
+    let htHome = prevLive.htHome ?? null;  // Önceki HT geçişinden gelen skor
+    let htAway = prevLive.htAway ?? null;
+    let ftHome = null, ftAway = null, htFtResult = null;
 
-    if (row.status_short === 'HT') {
-      // [FIX-3] Önce tablodaki HT sütunlarına bak, yoksa canlı skoru kullan
-      htHome = row.ht_home_score ?? row.home_score;
-      htAway = row.ht_away_score ?? row.away_score;
+    if (status === 'HT') {
+      // [FIX-3] 1H→HT geçişi: anlık skoru HT olarak yakala
+      htHome = hScore;
+      htAway = aScore;
       console.log(`  ⏸ HT: ${match.name} | İY ${htHome}-${htAway}`);
 
-    } else if (row.status_short === 'FT' && prevLive.status !== 'FT') {
-      ftHome = row.home_score;
-      ftAway = row.away_score;
-
-      // [FIX-3] HT skoru: tablodaki özel sütun → önceki live kayıt → null
-      if (htHome === undefined || htHome === null) {
-        htHome = row.ht_home_score ?? prevLive.htHome ?? null;
-        htAway = row.ht_away_score ?? prevLive.htAway ?? null;
-      }
-
+    } else if (status === 'FT' && prevLive.status !== 'FT') {
+      // [FIX-3] FT geçişi: FT skoru al, HT'yi prevLive'dan oku
+      ftHome = hScore;
+      ftAway = aScore;
       htFtResult = calcHtFtResult(htHome, htAway, ftHome, ftAway);
-      console.log(`  🏁 FT: ${match.name} | İY ${htHome ?? '?'}-${htAway ?? '?'} → MS ${ftHome}-${ftAway} | HT/FT: ${htFtResult || 'hesaplanamadı'}`);
+
+      console.log(
+        `  🏁 FT: ${match.name}` +
+        ` | İY: ${htHome ?? '?'}-${htAway ?? '?'}` +
+        ` → MS: ${ftHome}-${ftAway}` +
+        ` | HT/FT: ${htFtResult || 'hesaplanamadı'}`
+      );
 
       if (htFtResult) {
         learnFromMatch(fid, htFtResult);
         learnedCount++;
       } else {
-        console.warn(`  ⚠️ HT skoru eksik, ${match.name} için öğrenme atlandı`);
+        console.warn(`  ⚠️ ${match.name}: HT skoru yok — öğrenme atlandı (sistem HT statüsünü kaçırmış olabilir)`);
       }
-    }
 
-    match.liveData = { status: row.status_short, htHome, htAway, ftHome, ftAway, htFtResult };
+    }
+    // '1H' ve '2H': sadece statüyü güncelle, htHome/htAway'e dokunma
+
+    match.liveData = { status, htHome, htAway, ftHome, ftAway, htFtResult };
     matchCache.set(fid, match);
   }
 
   if (liveRows.length > 0) {
-    console.log(`[Live] Cache eşleşmesi: ${matchedLive}/${liveRows.length} | Bu döngüde öğrenilen: ${learnedCount}`);
+    console.log(`[Live] Eşleşme: ${matchedLive}/${liveRows.length} | Öğrenilen: ${learnedCount}`);
   }
 }
 
@@ -787,19 +744,18 @@ function hoursToKickoff(ko) {
 
 async function runCycle() {
   cycleCount++;
-  const elapsed = Math.round((Date.now() - startTime) / 60000);
+  const elapsed       = Math.round((Date.now() - startTime) / 60000);
   const bootstrapMode = memory.totalLearned < BOOTSTRAP_THRESHOLD;
 
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`[Tracker] Döngü #${cycleCount} | ${new Date().toISOString()} | +${elapsed}dk`);
-  console.log(`[Memory]  ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} toplam öğrenme${bootstrapMode ? ` | ⚡ BOOTSTRAP (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD})` : ''}`);
+  console.log(`[Memory]  ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} öğrenme${bootstrapMode ? ` | ⚡ BOOTSTRAP (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD})` : ''}`);
   console.log('═'.repeat(60));
 
   let nesineData;
   try {
     nesineData = await fetchJSON('https://cdnbulten.nesine.com/api/bulten/getprebultenfull');
   } catch (e) { console.error('[Nesine] Hata:', e.message); return; }
-
   const events = (nesineData?.sg?.EA || []).filter(e => e.TYPE === 1);
   console.log(`[Nesine] ${events.length} event`);
 
@@ -817,8 +773,7 @@ async function runCycle() {
     if (!result) continue;
     matchedCount++;
 
-    const { ev: best } = result;
-    const currMarkets  = parseMarkets(best.MA);
+    const currMarkets = parseMarkets(result.ev.MA);
     if (!Object.keys(currMarkets).length) continue;
 
     const fid     = fix.fixture_id;
@@ -839,24 +794,21 @@ async function runCycle() {
 
     const liveData = prev?.liveData || {};
     matchCache.set(fid, {
-      name:          `${fix.home_team} vs ${fix.away_team}`,
-      kickoff:        fix.kickoff,
-      latestMarkets:  currMarkets,
+      name: `${fix.home_team} vs ${fix.away_team}`,
+      kickoff: fix.kickoff, latestMarkets: currMarkets,
       ev_ft_cum, dep_ft_cum, snapshots, liveData,
     });
 
     if (signals.length === 0) continue;
 
-    const hasHighTier  = signals.some(s => s.tier === 'ELITE' || s.tier === 'PREMIER');
-    const isBootstrap  = signals.every(s => s.trendStrength === 'bootstrap');
-    const passThreshold = hasHighTier || signals.length >= MIN_SIGNALS || isBootstrap;
-    if (!passThreshold) continue;
+    const hasHighTier = signals.some(s => s.tier === 'ELITE' || s.tier === 'PREMIER');
+    const isBootstrap = signals.every(s => s.trendStrength === 'bootstrap');
+    if (!hasHighTier && signals.length < MIN_SIGNALS && !isBootstrap) continue;
 
     const topLabel = `${signals[0].type}_${signals[0].tier}`;
     if (alreadyFired(fid, topLabel)) continue;
 
     const interpretation = generateLocalInterpretation({ signals, features, predictions, stateKey });
-
     matchesWithSignals.push({
       fid, name: `${fix.home_team} vs ${fix.away_team}`,
       kickoff: fix.kickoff, h2k,
@@ -874,16 +826,13 @@ async function runCycle() {
   }
 
   const eliteCount = matchesWithSignals.filter(m => m.signals[0].tier === 'ELITE').length;
-  const subject    = eliteCount > 0
+  const subject = eliteCount > 0
     ? `💎 ScorePop Adaptive [${eliteCount} ELITE] — ${matchesWithSignals.map(m => m.signals[0].type).join(', ')}`
     : `🧠 ScorePop Adaptive — ${matchesWithSignals.length} Maç Sinyali`;
 
   const html = buildEmailHTML(matchesWithSignals, cycleCount);
   const sent = await sendEmail(subject, html);
-
-  if (sent) {
-    for (const m of matchesWithSignals) markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
-  }
+  if (sent) for (const m of matchesWithSignals) markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
 
   await syncLiveMatches();
   saveCache();
@@ -894,7 +843,7 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v2.1 — Self-Learning Market Engine    ║');
+  console.log('║  ScorePop Adaptive v2.2 — Self-Learning Market Engine    ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
   console.log(`║  Bootstrap eşiği: ${String(BOOTSTRAP_THRESHOLD).padEnd(40)}║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
@@ -918,10 +867,10 @@ async function main() {
   saveCache();
   console.log('\n╔══════════════════════════════════════════════════════════╗');
   console.log('║  OTURUM TAMAMLANDI                                       ║');
-  console.log(`║  Döngü      : ${String(cycleCount).padEnd(43)}║`);
-  console.log(`║  İzlenen    : ${String(matchCache.size).padEnd(43)}║`);
-  console.log(`║  Pattern    : ${String(Object.keys(memory.patterns).length).padEnd(43)}║`);
-  console.log(`║  Öğrenilen  : ${String(memory.totalLearned).padEnd(43)}║`);
+  console.log(`║  Döngü     : ${String(cycleCount).padEnd(44)}║`);
+  console.log(`║  İzlenen   : ${String(matchCache.size).padEnd(44)}║`);
+  console.log(`║  Pattern   : ${String(Object.keys(memory.patterns).length).padEnd(44)}║`);
+  console.log(`║  Öğrenilen : ${String(memory.totalLearned).padEnd(44)}║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 }
 
