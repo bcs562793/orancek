@@ -87,19 +87,45 @@ function saveCache() {
 
 function pushToGit() {
   const { execSync } = require('child_process');
+  console.log('[Git] 🔄 Otomatik yedekleme başlatılıyor...');
+
   try {
+    // 1. Kimlik
+    execSync('git config user.email "scorepop@bot.com"', { stdio: 'pipe' });
+    execSync('git config user.name "ScorePop Bot"', { stdio: 'pipe' });
+    console.log('[Git] 👤 Kimlik ayarlandı.');
+
+    // 2. Sadece JSON dosyalarını sepete (stage) ekle
     execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
+    console.log('[Git] 📦 Dosyalar stage alanına eklendi.');
 
-    // Değişiklik var mı kontrol et
-    const status = execSync('git status --porcelain', { stdio: 'pipe' }).toString().trim();
-    if (!status) { console.log('[Git] Değişiklik yok, commit atlandı.'); return; }
+    // 3. Sepette tam olarak hangi dosyalar var görelim
+    const stagedChanges = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
+    console.log(`[Git] 🔍 Sepetteki değişiklikler:\n${stagedChanges ? stagedChanges : '(Hiçbir değişiklik yok)'}`);
 
+    if (!stagedChanges) { 
+      console.log('[Git] ⏩ JSON verilerinde değişiklik yok, commit atlandı.'); 
+      return; 
+    }
+
+    // 4. Değişiklik varsa commit at ve sonucunu logla
     const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')} | learned=${memory.totalLearned} patterns=${Object.keys(memory.patterns).length}`;
-    execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
-    execSync('git push',               { stdio: 'pipe' });
-    console.log(`[Git] ✅ Push başarılı — ${msg}`);
+    
+    console.log(`[Git] 📝 Commit atılıyor... Mesaj: "${msg}"`);
+    const commitOut = execSync(`git commit -m "${msg}"`, { stdio: 'pipe' }).toString().trim();
+    console.log(`[Git] ℹ️ Commit Çıktısı:\n${commitOut}`);
+
+    // 5. Push işlemi ve sonucu
+    console.log('[Git] 🚀 GitHub\'a pushlanıyor...');
+    const pushOut = execSync('git push origin main', { stdio: 'pipe' }).toString().trim();
+    console.log(`[Git] ✅ Push Başarılı!\nÇıktı:\n${pushOut || '(Git push genellikle standart hata akışına log basar, burası boş dönebilir)'}`);
+
   } catch (e) {
-    console.warn('[Git] Push hatası (önemli değil):', e.message.split('\n')[0]);
+    // Hata durumunda sorunun ne olduğunu saklamadan açıkça yazdır
+    console.warn('\n[Git] 🚨 HATA DETAYI:');
+    if (e.stdout) console.warn('👉 STDOUT (Normal Çıktı):\n', e.stdout.toString().trim());
+    if (e.stderr) console.warn('👉 STDERR (Hata Çıktısı):\n', e.stderr.toString().trim());
+    console.warn('👉 KISA MESAJ:\n', e.message);
   }
 }
 
