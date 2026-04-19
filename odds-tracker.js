@@ -49,7 +49,7 @@ let memory       = { patterns: {}, version: 2, totalLearned: 0 };
 let cycleCount   = 0;
 const startTime  = Date.now();
 
-const FOCUS_RESULTS = ['1/1', '2/1', '2/2', '1/2'];
+const FOCUS_RESULTS = ['1/1', '2/1', 'X/X', 'X/2', 'X/1', '2/2', '1/2'];
 
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 1 — CACHE & MEMORY
