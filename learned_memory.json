@@ -130,6 +130,10 @@
       "1/2": {
         "count": 1,
         "firstSeen": "2026-04-19T16:54:53.280Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-19T18:04:53.411Z"
       }
     },
     "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
@@ -182,5 +186,5 @@
     }
   },
   "version": 2,
-  "totalLearned": 37
+  "totalLearned": 38
 }
