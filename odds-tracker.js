@@ -1,9 +1,16 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v2.2
+ * ai_tracker.js — ScorePop Adaptive Tracker v2.3
  * ═══════════════════════════════════════════════════════════════════
  * Nesine'den oran çeker → Özellik vektörü çıkarır → Durum kodu üretir →
  * Tarihsel hafızaya sorar → Olasılık/Lift hesaplar → Sinyal üretir.
  * Maç bittiğinde gerçek sonucu hafızaya işleyerek kendi kendini günceller.
+ *
+ * v2.3 Değişiklikleri:
+ *  - [FIX-5] hoursToKickoff: Timezone bilgisi olmayan tarihleri UTC+3 (İstanbul)
+ *            olarak yorumlar. "Yarın 20:30" maçı artık doğru hesaplanır.
+ *  - [FIX-6] Sinyal zamanlaması: Sinyaller yalnızca maça ≤ SIGNAL_WINDOW_H saat
+ *            (varsayılan 0.5 = 30 dk) kala ateşlenir. Cache/öğrenme her döngüde
+ *            çalışmaya devam eder.
  *
  * v2.2 Değişiklikleri:
  *  - [FIX-1] syncLiveMatches: Debug log eklendi (ID eşleşmesi, örnek satır)
@@ -19,6 +26,7 @@
  *   DRY_RUN
  *   SUPABASE_URL, SUPABASE_KEY
  *   BOOTSTRAP_THRESHOLD — Kaç maç öğrenene kadar bootstrap (varsayılan 20)
+ *   SIGNAL_WINDOW_H     — Maça kaç saat kalana kadar sinyal ateşlenmez (varsayılan 0.5 = 30dk)
  */
 'use strict';
 
@@ -36,6 +44,7 @@ const FIRED_FILE          = process.env.FIRED_FILE   || 'fired_alerts.json';
 const MEMORY_FILE         = process.env.MEMORY_FILE  || 'learned_memory.json';
 const DRY_RUN             = process.env.DRY_RUN === 'true';
 const BOOTSTRAP_THRESHOLD = parseInt(process.env.BOOTSTRAP_THRESHOLD || '20');
+const SIGNAL_WINDOW_H     = parseFloat(process.env.SIGNAL_WINDOW_H   || '0.5'); // [FIX-6] 30 dk
 const MIN_SIGNALS         = 2;
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -120,14 +129,14 @@ function pushToGit() {
     const stagedChanges = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
     console.log(`[Git] 🔍 Sepetteki değişiklikler:\n${stagedChanges ? stagedChanges : '(Hiçbir değişiklik yok)'}`);
 
-    if (!stagedChanges) { 
-      console.log('[Git] ⏩ JSON verilerinde değişiklik yok, commit atlandı.'); 
-      return; 
+    if (!stagedChanges) {
+      console.log('[Git] ⏩ JSON verilerinde değişiklik yok, commit atlandı.');
+      return;
     }
 
     // 4. Değişiklik varsa commit at ve sonucunu logla
     const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')} | learned=${memory.totalLearned} patterns=${Object.keys(memory.patterns).length}`;
-    
+
     console.log(`[Git] 📝 Commit atılıyor... Mesaj: "${msg}"`);
     const commitOut = execSync(`git commit -m "${msg}"`, { stdio: 'pipe' }).toString().trim();
     console.log(`[Git] ℹ️ Commit Çıktısı:\n${commitOut}`);
@@ -157,7 +166,7 @@ function fetchJSON(url) {
         'Accept-Encoding': 'identity',
         'Referer':         'https://www.nesine.com/',
         'Origin':          'https://www.nesine.com',
-        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/2.2)',
+        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/2.3)',
       }
     }, res => {
       let buf = '';
@@ -594,7 +603,7 @@ function generateLocalInterpretation(matchData) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 10 — SİNYAL LOGGER (Mail kaldırıldı)
+// BÖLÜM 10 — SİNYAL LOGGER
 // ════════════════════════════════════════════════════════════════════
 function logSignals(matchesWithSignals, cycleNo) {
   const now = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
@@ -607,7 +616,7 @@ function logSignals(matchesWithSignals, cycleNo) {
   for (const m of matchesWithSignals) {
     const top = m.signals[0];
     console.log(`\n${tierColor[top.tier] || '⚪'} ${m.name}`);
-    console.log(`   ⏰ Başlangıç: ${m.h2k < 1 ? 'Başladı' : m.h2k.toFixed(1) + ' saat sonra'}`);
+    console.log(`   ⏰ Başlangıç: ${m.h2k < 0 ? 'Başladı' : m.h2k < 1 ? Math.round(m.h2k * 60) + ' dk sonra' : m.h2k.toFixed(1) + ' saat sonra'}`);
     console.log(`   📈 Ev kümülâtif: ${m.ev_ft_cum.toFixed(2)} | Dep: ${m.dep_ft_cum.toFixed(2)}`);
 
     for (const s of m.signals.slice(0, 3)) {
@@ -646,14 +655,6 @@ async function loadFixtures() {
 
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 12 — CANLI SKOR & ÖĞRENME [FIX-3]
-//
-// ─── Geçiş mantığı (odds-tracker.js ile birebir) ───────────────────
-//   '1H'           → durum kaydet, skor kaydetme
-//   '1H'/'2H'→'HT' → o anki home_score/away_score = HT skoru → kaydet
-//   'HT'/'2H'→'FT' → FT skoru al + prevLive.htHome/htAway'den HT oku → öğren
-//
-// live_matches sütunları: fixture_id, status_short, home_score, away_score
-// Özel ht_home_score / ht_away_score sütununa GEREK YOK.
 // ════════════════════════════════════════════════════════════════════
 function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
   if (htHome == null || ftHome == null) return null;
@@ -667,7 +668,6 @@ async function syncLiveMatches() {
 
   let liveRows;
   try {
-    // [FIX-3] Sadece mevcut sütunlar — özel HT sütunu YOK
     const { data, error } = await sb
       .from('live_matches')
       .select('fixture_id, status_short, home_score, away_score')
@@ -676,7 +676,6 @@ async function syncLiveMatches() {
     liveRows = data || [];
   } catch (e) { console.error('[Live] Hata:', e.message); return; }
 
-  // [FIX-1] Debug
   console.log(`[Live] ${liveRows.length} aktif/biten maç`);
   if (liveRows.length > 0) console.log('[Live] Örnek:', JSON.stringify(liveRows[0]));
 
@@ -693,21 +692,18 @@ async function syncLiveMatches() {
     if (!match) continue;
     const prevLive = match.liveData || {};
 
-    // Aynı statüde tekrar işleme (FT hariç)
     if (prevLive.status === status && status !== 'FT') continue;
 
-    let htHome = prevLive.htHome ?? null;  // Önceki HT geçişinden gelen skor
+    let htHome = prevLive.htHome ?? null;
     let htAway = prevLive.htAway ?? null;
     let ftHome = null, ftAway = null, htFtResult = null;
 
     if (status === 'HT') {
-      // [FIX-3] 1H→HT geçişi: anlık skoru HT olarak yakala
       htHome = hScore;
       htAway = aScore;
       console.log(`  ⏸ HT: ${match.name} | İY ${htHome}-${htAway}`);
 
     } else if (status === 'FT' && prevLive.status !== 'FT') {
-      // [FIX-3] FT geçişi: FT skoru al, HT'yi prevLive'dan oku
       ftHome = hScore;
       ftAway = aScore;
       htFtResult = calcHtFtResult(htHome, htAway, ftHome, ftAway);
@@ -723,11 +719,9 @@ async function syncLiveMatches() {
         learnFromMatch(fid, htFtResult);
         learnedCount++;
       } else {
-        console.warn(`  ⚠️ ${match.name}: HT skoru yok — öğrenme atlandı (sistem HT statüsünü kaçırmış olabilir)`);
+        console.warn(`  ⚠️ ${match.name}: HT skoru yok — öğrenme atlandı`);
       }
-
     }
-    // '1H' ve '2H': sadece statüyü güncelle, htHome/htAway'e dokunma
 
     match.liveData = { status, htHome, htAway, ftHome, ftAway, htFtResult };
     matchCache.set(fid, match);
@@ -741,9 +735,22 @@ async function syncLiveMatches() {
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 13 — ANA DÖNGÜ
 // ════════════════════════════════════════════════════════════════════
+
+/**
+ * [FIX-5] Timezone düzeltmesi:
+ * Supabase'de "2026-04-20 20:30:00" gibi timezone bilgisi olmayan tarihler
+ * varsayılan olarak UTC+3 (İstanbul) kabul edilir.
+ * Timezone bilgisi varsa (Z veya +03:00 gibi) olduğu gibi kullanılır.
+ */
 function hoursToKickoff(ko) {
   if (!ko) return 999;
-  try { return (new Date(ko) - Date.now()) / 3600000; } catch { return 999; }
+  try {
+    const hasTimezone = /Z|[+-]\d{2}:?\d{2}$/.test(String(ko));
+    const utcMs = hasTimezone
+      ? new Date(ko).getTime()
+      : new Date(ko).getTime() - 3 * 3600000; // UTC+3 → UTC
+    return (utcMs - Date.now()) / 3600000;
+  } catch { return 999; }
 }
 
 async function runCycle() {
@@ -754,6 +761,7 @@ async function runCycle() {
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`[Tracker] Döngü #${cycleCount} | ${new Date().toISOString()} | +${elapsed}dk`);
   console.log(`[Memory]  ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} öğrenme${bootstrapMode ? ` | ⚡ BOOTSTRAP (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD})` : ''}`);
+  console.log(`[Config]  Sinyal penceresi: ≤${SIGNAL_WINDOW_H * 60} dk | Lookahead: ${LOOKAHEAD_H} sa`);
   console.log('═'.repeat(60));
 
   let nesineData;
@@ -771,6 +779,8 @@ async function runCycle() {
 
   for (const fix of fixtures) {
     const h2k = hoursToKickoff(fix.kickoff);
+
+    // İzleme penceresi dışındaysa atla
     if (h2k > LOOKAHEAD_H || h2k < -2.5) continue;
 
     const result = findBestMatch(fix.home_team, fix.away_team, events);
@@ -803,6 +813,13 @@ async function runCycle() {
       ev_ft_cum, dep_ft_cum, snapshots, liveData,
     });
 
+    // [FIX-6] Sinyal zamanlaması: maça SIGNAL_WINDOW_H saatten fazla varsa bekle
+    if (h2k > SIGNAL_WINDOW_H) {
+      const minLeft = Math.round(h2k * 60);
+      console.log(`[⏳ Bekle] ${fix.home_team} vs ${fix.away_team} | ${minLeft} dk kaldı — sinyal hazır ama henüz erken (eşik: ${Math.round(SIGNAL_WINDOW_H * 60)} dk)`);
+      continue;
+    }
+
     if (signals.length === 0) continue;
 
     const hasHighTier = signals.some(s => s.tier === 'ELITE' || s.tier === 'PREMIER');
@@ -829,7 +846,6 @@ async function runCycle() {
     return;
   }
 
-    // YENİ:
   logSignals(matchesWithSignals, cycleCount);
   for (const m of matchesWithSignals) markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
 
@@ -842,9 +858,10 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v2.2 — Self-Learning Market Engine    ║');
+  console.log('║  ScorePop Adaptive v2.3 — Self-Learning Market Engine    ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
-  console.log(`║  Bootstrap eşiği: ${String(BOOTSTRAP_THRESHOLD).padEnd(40)}║`);
+  console.log(`║  Bootstrap eşiği : ${String(BOOTSTRAP_THRESHOLD).padEnd(38)}║`);
+  console.log(`║  Sinyal penceresi: ≤${String(Math.round(SIGNAL_WINDOW_H * 60) + ' dk').padEnd(37)}║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
