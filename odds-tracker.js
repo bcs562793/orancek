@@ -51,6 +51,37 @@ const startTime  = Date.now();
 
 const FOCUS_RESULTS = ['1/1', '2/1', 'X/X', 'X/2', 'X/1', '2/2', '1/2'];
 
+// ── State ─────────────────────────────────────────────────────────────
+const matchCache = new Map();
+let firedAlerts  = {};
+let memory       = { patterns: {}, version: 2, totalLearned: 0 };
+let cycleCount   = 0;
+const startTime  = Date.now();
+
+const FOCUS_RESULTS = ['1/1', '2/1', 'X/X', 'X/2', 'X/1', '2/2', '1/2'];
+
+// 👇 YENİ FONKSİYONLARI TAM BURAYA EKLİYORSUN 👇
+// ── Alert Helpers ─────────────────────────────────────────────────────
+function alreadyFired(fixtureId, signalLabel) {
+  if (!firedAlerts[fixtureId]) return false;
+  return firedAlerts[fixtureId].includes(signalLabel);
+}
+
+function markFired(fixtureId, signalLabel) {
+  if (!firedAlerts[fixtureId]) {
+    firedAlerts[fixtureId] = [];
+  }
+  if (!firedAlerts[fixtureId].includes(signalLabel)) {
+    firedAlerts[fixtureId].push(signalLabel);
+  }
+}
+// 👆 ──────────────────────────────────────────────────────────────── 👆
+
+// ════════════════════════════════════════════════════════════════════
+// BÖLÜM 1 — CACHE & MEMORY
+// ════════════════════════════════════════════════════════════════════
+function loadCache() {
+
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 1 — CACHE & MEMORY
 // ════════════════════════════════════════════════════════════════════
