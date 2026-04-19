@@ -741,8 +741,9 @@ async function runCycle() {
 
   for (const fix of fixtures) {
     const h2k = hoursToKickoff(fix.kickoff);
-    if (h2k > LOOKAHEAD_H || h2k < 0) continue;
-
+    // Maçın varsayılan saatinden itibaren 2.5 saat boyunca (maç bitene kadar) takip etmeye izin ver
+    if (h2k > LOOKAHEAD_H || h2k < -2.5) continue;
+    
     const result = findBestMatch(fix.home_team, fix.away_team, events);
     if (!result) continue;
     matchedCount++;
