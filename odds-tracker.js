@@ -680,11 +680,6 @@ async function syncLiveMatches() {
     const hScore = row.home_score ?? null;
     const aScore = row.away_score ?? null;
 
-    if (!matchCache.has(fid)) {
-      if (status === 'FT') console.log(`[Live] Cache'de YOK (FT): fixture_id=${fid} | ${hScore}-${aScore}`);
-      continue;
-    }
-
     matchedLive++;
     const match    = matchCache.get(fid);
     const prevLive = match.liveData || {};
