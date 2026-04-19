@@ -31,6 +31,8 @@ jobs:
   track:
     name: "Piyasa İzleme + AI Analizi"
     runs-on: ubuntu-latest
+    permissions:           # BOTA BURADA YETKİ VERİYORUZ
+      contents: write      # REPOYA YAZMA YETKİSİ
     timeout-minutes: 290       # 4 saat 50 dk — GitHub Actions 6 saat limiti altında
 
     steps:
