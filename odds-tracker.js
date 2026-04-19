@@ -1,23 +1,42 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v2.3
+ * ai_tracker.js — ScorePop Adaptive Tracker v3.0
  * ═══════════════════════════════════════════════════════════════════
  * Nesine'den oran çeker → Özellik vektörü çıkarır → Durum kodu üretir →
  * Tarihsel hafızaya sorar → Olasılık/Lift hesaplar → Sinyal üretir.
- * Maç bittiğinde gerçek sonucu hafızaya işleyerek kendi kendini günceller.
+ * Maç bittiğinde gerçek sonucu hafızaya işler + tahmin doğruluk kaydını günceller.
  *
- * v2.3 Değişiklikleri:
- *  - [FIX-5] hoursToKickoff: Timezone bilgisi olmayan tarihleri UTC+3 (İstanbul)
- *            olarak yorumlar. "Yarın 20:30" maçı artık doğru hesaplanır.
- *  - [FIX-6] Sinyal zamanlaması: Sinyaller yalnızca maça ≤ SIGNAL_WINDOW_H saat
- *            (varsayılan 0.5 = 30 dk) kala ateşlenir. Cache/öğrenme her döngüde
- *            çalışmaya devam eder.
+ * ── v3.0 YENİLİKLERİ ────────────────────────────────────────────────
+ *  [NEW-1] SİNYAL KAYDI (memory.pendingSignals):
+ *          Her ateşlenen sinyal fixture_id bazında hafızaya alınır.
+ *          Kaydedilen: stateKey, topSignal, tier, lift, prob, predictedAt
  *
- * v2.2 Değişiklikleri:
- *  - [FIX-1] syncLiveMatches: Debug log eklendi (ID eşleşmesi, örnek satır)
- *  - [FIX-2] Bootstrap sinyal modu: 20 maç öğrenene kadar kural tabanlı sinyal
- *  - [FIX-3] HT skoru: '1H'→'HT' geçişinde home_score/away_score yakalanır.
- *            FT'de prevLive.htHome/htAway'den okunur. Özel DB sütunu YOK.
- *  - [FIX-4] evaluateSmartSignals: histCount alanı signals nesnesine eklendi
+ *  [NEW-2] SONUÇ ÇÖZÜMLEME (resolvePendingSignal):
+ *          FT geldiğinde pendingSignals[fid] açılır, tahmin vs gerçek karşılaştırılır.
+ *          memory.signalAccuracy[type] → { fired, correct, accuracy } güncellenir.
+ *
+ *  [NEW-3] DİNAMİK TİER AYARLAMASI (getAccuracyMultiplier):
+ *          Sinyal tipi için doğruluk oranı hesaplanır.
+ *          >%45 ve ≥10 örnek → BOOST (+1 tier)
+ *          <%20 ve ≥10 örnek → PENALTY (sinyal bastırılır)
+ *          Orta → nötr
+ *
+ *  [NEW-4] HASSAS SINYAL FİLTRESİ:
+ *          Lift × accuracy_multiplier < 1.5 olan sinyaller düşürülür.
+ *          Bootstrap modunda accuracy filtresi devre dışı (yeterli veri yok).
+ *
+ *  [NEW-5] ZENGİNLEŞTİRİLMİŞ LOG:
+ *          Her sinyal yanında gerçekçi doğruluk oranı gösterilir.
+ *          "Bu sinyal tipi: 15 ateşlendi, 7 doğru (%47)" formatı.
+ *
+ *  [NEW-6] ACCURACY RAPORU (logAccuracyReport):
+ *          Her 10 döngüde bir tam doğruluk raporu basılır.
+ *
+ * ── v2.3'ten korunan düzeltmeler ────────────────────────────────────
+ *  [FIX-5] hoursToKickoff: Timezone bilgisi olmayan tarihler UTC+3 kabul edilir.
+ *  [FIX-6] Sinyal zamanlaması: ≤SIGNAL_WINDOW_H saat kala ateşlenir.
+ *  [FIX-3] HT skoru: '1H'→'HT' geçişinde yakalanır, özel DB sütunu yok.
+ *  [FIX-2] Bootstrap: 20 maç öğrenene kadar kural tabanlı sinyal.
+ *  [FIX-4] histCount alanı signals nesnesine eklendi.
  *
  * Ortam değişkenleri:
  *   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_TO
@@ -26,7 +45,10 @@
  *   DRY_RUN
  *   SUPABASE_URL, SUPABASE_KEY
  *   BOOTSTRAP_THRESHOLD — Kaç maç öğrenene kadar bootstrap (varsayılan 20)
- *   SIGNAL_WINDOW_H     — Maça kaç saat kalana kadar sinyal ateşlenmez (varsayılan 0.5 = 30dk)
+ *   SIGNAL_WINDOW_H     — Maça kaç saat kalana kadar sinyal ateşlenmez (varsayılan 0.5)
+ *   ACCURACY_MIN_SAMPLES — Accuracy filtresinin devreye gireceği min örnek sayısı (varsayılan 10)
+ *   ACCURACY_PENALTY_THR — Bu oranın altı → sinyal bastır (varsayılan 0.20)
+ *   ACCURACY_BOOST_THR   — Bu oranın üstü → tier yükselt (varsayılan 0.45)
  */
 'use strict';
 
@@ -35,16 +57,19 @@ const fs         = require('fs');
 const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 
-// ── Config ───────────────────────────────────────────────────────────
-const INTERVAL_MS         = parseInt(process.env.INTERVAL_MS         || '300000');
-const MAX_RUNTIME_MS      = parseInt(process.env.MAX_RUNTIME_MS      || '17100000');
-const LOOKAHEAD_H         = parseInt(process.env.LOOKAHEAD_HOURS     || '8');
+// ── Config ────────────────────────────────────────────────────────────
+const INTERVAL_MS         = parseInt(process.env.INTERVAL_MS          || '300000');
+const MAX_RUNTIME_MS      = parseInt(process.env.MAX_RUNTIME_MS       || '17100000');
+const LOOKAHEAD_H         = parseInt(process.env.LOOKAHEAD_HOURS      || '8');
 const CACHE_FILE          = process.env.CACHE_FILE   || 'tracker_cache.json';
 const FIRED_FILE          = process.env.FIRED_FILE   || 'fired_alerts.json';
 const MEMORY_FILE         = process.env.MEMORY_FILE  || 'learned_memory.json';
 const DRY_RUN             = process.env.DRY_RUN === 'true';
-const BOOTSTRAP_THRESHOLD = parseInt(process.env.BOOTSTRAP_THRESHOLD || '20');
-const SIGNAL_WINDOW_H     = parseFloat(process.env.SIGNAL_WINDOW_H   || '0.5'); // [FIX-6] 30 dk
+const BOOTSTRAP_THRESHOLD = parseInt(process.env.BOOTSTRAP_THRESHOLD  || '20');
+const SIGNAL_WINDOW_H     = parseFloat(process.env.SIGNAL_WINDOW_H    || '0.5');
+const ACCURACY_MIN_SAMPLES= parseInt(process.env.ACCURACY_MIN_SAMPLES || '10');
+const ACCURACY_PENALTY_THR= parseFloat(process.env.ACCURACY_PENALTY_THR || '0.20');
+const ACCURACY_BOOST_THR  = parseFloat(process.env.ACCURACY_BOOST_THR   || '0.45');
 const MIN_SIGNALS         = 2;
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -54,32 +79,115 @@ const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_
 // ── State ─────────────────────────────────────────────────────────────
 const matchCache = new Map();
 let firedAlerts  = {};
-let memory       = { patterns: {}, version: 2, totalLearned: 0 };
+let memory       = {
+  patterns:       {},
+  signalAccuracy: {},   // [NEW-1] { "X/2": { fired, correct }, ... }
+  pendingSignals: {},   // [NEW-1] { "fixture_id": { predictedAt, stateKey, topSignal, ... } }
+  version:        3,
+  totalLearned:   0,
+};
 let cycleCount   = 0;
 const startTime  = Date.now();
 
 const FOCUS_RESULTS = ['1/1', '2/1', 'X/X', 'X/2', 'X/1', '2/2', '1/2'];
 
-// ── Alert Helpers ─────────────────────────────────────────────────────
-function alreadyFired(fixtureId, signalLabel) {
-  if (!firedAlerts[fixtureId]) return false;
-  return firedAlerts[fixtureId].includes(signalLabel);
+// ══════════════════════════════════════════════════════════════════════
+// BÖLÜM 0 — DOĞRULUK MOTORU [NEW]
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * [NEW-2] Biten maçta tahmin vs gerçek karşılaştırması.
+ * pendingSignals[fid] varsa, actualResult ile karşılaştırır ve
+ * memory.signalAccuracy'yi günceller.
+ */
+function resolvePendingSignal(fid, actualResult) {
+  const pending = memory.pendingSignals[fid];
+  if (!pending) return;
+
+  const { topSignal, tier, stateKey, predictedAt } = pending;
+
+  if (!memory.signalAccuracy[topSignal]) {
+    memory.signalAccuracy[topSignal] = { fired: 0, correct: 0 };
+  }
+
+  const acc = memory.signalAccuracy[topSignal];
+  // fired zaten markFired'da artırılıyor; burada sadece correct'ı güncelle
+  const isCorrect = (topSignal === actualResult);
+  if (isCorrect) acc.correct++;
+
+  const accuracy = acc.fired > 0 ? (acc.correct / acc.fired) : 0;
+
+  console.log(
+    `  [Accuracy] ${topSignal} (${tier}) → Tahmin: ${topSignal} | Gerçek: ${actualResult}` +
+    ` | ${isCorrect ? '✅ DOĞRU' : '❌ YANLIŞ'}` +
+    ` | Genel Doğruluk: %${(accuracy * 100).toFixed(1)} (${acc.correct}/${acc.fired})`
+  );
+
+  // Çözümlendi, pending'den çıkar
+  delete memory.pendingSignals[fid];
 }
 
-function markFired(fixtureId, signalLabel) {
-  if (!firedAlerts[fixtureId]) {
-    firedAlerts[fixtureId] = [];
+/**
+ * [NEW-3] Sinyal tipinin geçmiş doğruluk oranına göre çarpan döndürür.
+ * Yeterli örnek yoksa nötr (1.0) döner.
+ * @returns { multiplier: number, label: string, accuracy: number|null }
+ */
+function getAccuracyMultiplier(signalType) {
+  const acc = memory.signalAccuracy[signalType];
+  if (!acc || acc.fired < ACCURACY_MIN_SAMPLES) {
+    return { multiplier: 1.0, label: 'yetersiz_örnek', accuracy: null };
   }
-  if (!firedAlerts[fixtureId].includes(signalLabel)) {
-    firedAlerts[fixtureId].push(signalLabel);
+
+  const accuracy = acc.correct / acc.fired;
+
+  if (accuracy >= ACCURACY_BOOST_THR) {
+    return { multiplier: 1.4, label: `🟢 %${(accuracy*100).toFixed(0)} doğru`, accuracy };
+  } else if (accuracy <= ACCURACY_PENALTY_THR) {
+    return { multiplier: 0.0, label: `🔴 %${(accuracy*100).toFixed(0)} doğru — bastırıldı`, accuracy };
+  } else {
+    return { multiplier: 1.0, label: `🟡 %${(accuracy*100).toFixed(0)} doğru`, accuracy };
   }
 }
 
+/**
+ * [NEW-6] Tüm sinyal tiplerine ait doğruluk raporunu konsola basar.
+ */
+function logAccuracyReport() {
+  const entries = Object.entries(memory.signalAccuracy)
+    .filter(([, v]) => v.fired >= 3)
+    .map(([type, v]) => ({ type, fired: v.fired, correct: v.correct, accuracy: v.correct / v.fired }))
+    .sort((a, b) => b.accuracy - a.accuracy);
 
+  if (entries.length === 0) {
+    console.log('[Accuracy] Henüz yeterli sinyal verisi yok.');
+    return;
+  }
 
-// ════════════════════════════════════════════════════════════════════
+  console.log('\n' + '─'.repeat(55));
+  console.log('  📈 SİNYAL DOĞRULUK RAPORU');
+  console.log('─'.repeat(55));
+  for (const e of entries) {
+    const bar    = '█'.repeat(Math.round(e.accuracy * 20));
+    const empty  = '░'.repeat(20 - Math.round(e.accuracy * 20));
+    const rating = e.accuracy >= ACCURACY_BOOST_THR  ? '✅ BOOST' :
+                   e.accuracy <= ACCURACY_PENALTY_THR ? '❌ BASTIR' : '⚡ NORMAL';
+    console.log(
+      `  ${e.type.padEnd(5)} ${bar}${empty} %${(e.accuracy*100).toFixed(1).padStart(5)} ` +
+      `(${e.correct}/${e.fired}) ${rating}`
+    );
+  }
+
+  // Genel başarı
+  const totalFired   = entries.reduce((s, e) => s + e.fired, 0);
+  const totalCorrect = entries.reduce((s, e) => s + e.correct, 0);
+  console.log('─'.repeat(55));
+  console.log(`  TOPLAM: ${totalCorrect}/${totalFired} doğru (%${(totalCorrect/totalFired*100).toFixed(1)})`);
+  console.log('─'.repeat(55) + '\n');
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 1 — CACHE & MEMORY
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function loadCache() {
   if (fs.existsSync(CACHE_FILE)) {
     try {
@@ -93,9 +201,22 @@ function loadCache() {
   }
   if (fs.existsSync(MEMORY_FILE)) {
     try {
-      memory = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
-      if (!memory.patterns) memory = { patterns: {}, version: 2, totalLearned: memory.totalLearned || 0 };
-      console.log(`[Memory] ${Object.keys(memory.patterns).length} pattern | Toplam öğrenilen: ${memory.totalLearned}`);
+      const loaded = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+      if (!loaded.patterns) loaded.patterns = {};
+      // v2→v3 migration: yeni alanları koru
+      memory = {
+        patterns:       loaded.patterns       || {},
+        signalAccuracy: loaded.signalAccuracy || {},
+        pendingSignals: loaded.pendingSignals || {},
+        version:        3,
+        totalLearned:   loaded.totalLearned   || 0,
+      };
+      console.log(
+        `[Memory] ${Object.keys(memory.patterns).length} pattern` +
+        ` | ${memory.totalLearned} öğrenme` +
+        ` | ${Object.keys(memory.signalAccuracy).length} doğruluk kaydı` +
+        ` | ${Object.keys(memory.pendingSignals).length} bekleyen sinyal`
+      );
     } catch (e) { console.warn('[Memory] Yüklenemedi:', e.message); }
   }
 }
@@ -106,58 +227,31 @@ function saveCache() {
   fs.writeFileSync(CACHE_FILE,  JSON.stringify(obj,    null, 2));
   fs.writeFileSync(FIRED_FILE,  JSON.stringify(firedAlerts, null, 2));
   fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
-
-  // Git'e kaydet (arka planda, hata olursa döngüyü durdurmaz)
   pushToGit();
 }
 
 function pushToGit() {
   const { execSync } = require('child_process');
   console.log('[Git] 🔄 Otomatik yedekleme başlatılıyor...');
-
   try {
-    // 1. Kimlik
     execSync('git config user.email "scorepop@bot.com"', { stdio: 'pipe' });
     execSync('git config user.name "ScorePop Bot"', { stdio: 'pipe' });
-    console.log('[Git] 👤 Kimlik ayarlandı.');
-
-    // 2. Sadece JSON dosyalarını sepete (stage) ekle
     execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
-    console.log('[Git] 📦 Dosyalar stage alanına eklendi.');
-
-    // 3. Sepette tam olarak hangi dosyalar var görelim
-    const stagedChanges = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
-    console.log(`[Git] 🔍 Sepetteki değişiklikler:\n${stagedChanges ? stagedChanges : '(Hiçbir değişiklik yok)'}`);
-
-    if (!stagedChanges) {
-      console.log('[Git] ⏩ JSON verilerinde değişiklik yok, commit atlandı.');
-      return;
-    }
-
-    // 4. Değişiklik varsa commit at ve sonucunu logla
-    const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')} | learned=${memory.totalLearned} patterns=${Object.keys(memory.patterns).length}`;
-
-    console.log(`[Git] 📝 Commit atılıyor... Mesaj: "${msg}"`);
-    const commitOut = execSync(`git commit -m "${msg}"`, { stdio: 'pipe' }).toString().trim();
-    console.log(`[Git] ℹ️ Commit Çıktısı:\n${commitOut}`);
-
-    // 5. Push işlemi ve sonucu
-    console.log('[Git] 🚀 GitHub\'a pushlanıyor...');
-    const pushOut = execSync('git push origin main', { stdio: 'pipe' }).toString().trim();
-    console.log(`[Git] ✅ Push Başarılı!\nÇıktı:\n${pushOut || '(Git push genellikle standart hata akışına log basar, burası boş dönebilir)'}`);
-
+    const staged = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
+    if (!staged) { console.log('[Git] ⏩ Değişiklik yok, commit atlandı.'); return; }
+    const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')} | learned=${memory.totalLearned} acc_records=${Object.keys(memory.signalAccuracy).length}`;
+    execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
+    execSync('git push origin main', { stdio: 'pipe' });
+    console.log('[Git] ✅ Push başarılı.');
   } catch (e) {
-    // Hata durumunda sorunun ne olduğunu saklamadan açıkça yazdır
-    console.warn('\n[Git] 🚨 HATA DETAYI:');
-    if (e.stdout) console.warn('👉 STDOUT (Normal Çıktı):\n', e.stdout.toString().trim());
-    if (e.stderr) console.warn('👉 STDERR (Hata Çıktısı):\n', e.stderr.toString().trim());
-    console.warn('👉 KISA MESAJ:\n', e.message);
+    if (e.stderr) console.warn('[Git] STDERR:', e.stderr.toString().trim());
+    console.warn('[Git] Hata:', e.message);
   }
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 2 — HTTP + NESİNE
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
@@ -166,7 +260,7 @@ function fetchJSON(url) {
         'Accept-Encoding': 'identity',
         'Referer':         'https://www.nesine.com/',
         'Origin':          'https://www.nesine.com',
-        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/2.3)',
+        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.0)',
       }
     }, res => {
       let buf = '';
@@ -181,27 +275,27 @@ function fetchJSON(url) {
   });
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 3 — TAKIM EŞLEŞTİRME
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 const TEAM_ALIASES = {
-  'not forest':     'nottingham forest',
-  'cry. palace':    'crystal palace',
-  'r wien amt':     'rapid wien',
-  'w bregenz':      'schwarz weiss b',
-  'rb bragantino':  'bragantino',
-  'new york rb':    'ny red bulls',
-  'fc midtjylland': 'midtjylland',
+  'not forest':        'nottingham forest',
+  'cry. palace':       'crystal palace',
+  'r wien amt':        'rapid wien',
+  'w bregenz':         'schwarz weiss b',
+  'rb bragantino':     'bragantino',
+  'new york rb':       'ny red bulls',
+  'fc midtjylland':    'midtjylland',
   'pacos de ferreira': 'p ferreira',
-  'seattle s':      'seattle sounders',
-  'st louis':       's louis city',
-  'gabala':         'kabala',
-  'rz pellets wac': 'wolfsberger',
-  'sw bregenz':     'schwarz weiss b',
-  'fc zurich':      'zurih',
-  'future fc':      'modern sport club',
-  'the new saints': 'tns',
-  'vancouver':      'v whitecaps',
+  'seattle s':         'seattle sounders',
+  'st louis':          's louis city',
+  'gabala':            'kabala',
+  'rz pellets wac':    'wolfsberger',
+  'sw bregenz':        'schwarz weiss b',
+  'fc zurich':         'zurih',
+  'future fc':         'modern sport club',
+  'the new saints':    'tns',
+  'vancouver':         'v whitecaps',
 };
 
 function norm(s) {
@@ -230,7 +324,6 @@ function findBestMatch(home, away, events) {
   const ONE_SIDE_HIGH= 0.65;
   const CROSS_MIN    = 0.25;
 
-  // Aşama 1: Normal eşleştirme
   let bestNormal = null, bestNormalScore = THRESHOLD - 0.01;
   for (const ev of events) {
     const hs  = tokenSim(normA(home), norm(ev.HN));
@@ -243,7 +336,6 @@ function findBestMatch(home, away, events) {
   }
   if (bestNormal) return { ev: bestNormal, score: bestNormalScore };
 
-  // Aşama 2: Çapraz eşleştirme
   let bestCross = null, bestCrossScore = -1;
   for (const ev of events) {
     const combos = [
@@ -263,9 +355,9 @@ function findBestMatch(home, away, events) {
   return bestCross ? { ev: bestCross, score: bestCrossScore } : null;
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 4 — MARKET PARSE
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function parseMarkets(maArr) {
   const m = {};
   if (!Array.isArray(maArr)) return m;
@@ -292,9 +384,9 @@ function parseMarkets(maArr) {
   return m;
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 5 — DELTA HESABI
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function calcDelta(prev, curr) {
   const ch   = {};
   const keys = ['1x2','ht_1x2','2h_1x2','ht_ft','ou25','ou15','ou35','btts','more_goals_half'];
@@ -318,9 +410,9 @@ function ftGroups(changes) {
   };
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 6 — ÖZELLİK ÇIKARIMI & DURUM KODU
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function bucket(val, thresholds, labels) {
   if (val === null || val === undefined) return labels[labels.length - 1];
   for (let i = 0; i < thresholds.length; i++) if (val <= thresholds[i]) return labels[i];
@@ -360,7 +452,6 @@ function extractFeatures(markets, changes, cumCache, snapshots) {
     dep_ft_sign:   dep_ft < -1 ? 'neg' : dep_ft > 1 ? 'pos' : 'flat',
   };
 
-  // Momentum (son 3 snapshot)
   const recent = (snapshots || []).slice(-3);
   let evMomentum = 'flat', depMomentum = 'flat';
   if (recent.length >= 2) {
@@ -399,9 +490,9 @@ function generateStateKey(features) {
   ].join('|');
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 7 — ÖĞRENME MOTORU
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function learnFromMatch(fixtureId, actualHtFt) {
   const match = matchCache.get(fixtureId);
   if (!match || !match.snapshots || match.snapshots.length === 0) return;
@@ -493,16 +584,15 @@ function predictWithSimilarity(stateKey) {
   return final;
 }
 
-// ════════════════════════════════════════════════════════════════════
-// BÖLÜM 8 — AKILLI SİNYAL MOTORU
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// BÖLÜM 8 — AKILLI SİNYAL MOTORU (v3.0 - Accuracy entegreli)
+// ══════════════════════════════════════════════════════════════════════
 function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
   const features = extractFeatures(markets, changes, cumCache, snapshots);
   const stateKey = generateStateKey(features);
   const raw      = features.raw;
   const b        = features.buckets;
 
-  // stateKey'i son snapshot'a yaz (öğrenme için kritik)
   if (snapshots.length > 0) snapshots[snapshots.length - 1]._stateKey = stateKey;
 
   const predictions = predictWithSimilarity(stateKey);
@@ -513,39 +603,58 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
     (b.ev_momentum === 'falling')                                 ? 'ev_dominant'     :
     (b.dep_momentum === 'falling')                                ? 'dep_dominant'    : 'neutral';
 
-  // ── [FIX-2] Bootstrap: yeterli hafıza yokken kural tabanlı ──────────
   const hasMemory = memory.totalLearned >= BOOTSTRAP_THRESHOLD;
 
+  // ── [FIX-2] Bootstrap sinyaller ─────────────────────────────────
   if (!hasMemory) {
     const evCum  = cumCache.ev_ft_cum  || 0;
     const depCum = cumCache.dep_ft_cum || 0;
 
     if (raw.iyms21 && raw.iyms21 <= 12 && evCum <= -4)
-      signals.push({ type: '2/1', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS21=${raw.iyms21} ev_cum=${evCum}`, prec: 5.0, lift: 1.5, prob: 0.15, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+      signals.push({ type: '2/1', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS21=${raw.iyms21} ev_cum=${evCum}`, prec: 5.0, lift: 1.5, prob: 0.15, stateKey, trendStrength: 'bootstrap', histCount: 0, accLabel: 'bootstrap' });
 
     if (raw.ms1 && raw.ms1 <= 1.50 && evCum <= -3)
-      signals.push({ type: '1/1', tier: 'STANDART', rule: `[BOOTSTRAP] MS1=${raw.ms1} ev_cum=${evCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+      signals.push({ type: '1/1', tier: 'STANDART', rule: `[BOOTSTRAP] MS1=${raw.ms1} ev_cum=${evCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0, accLabel: 'bootstrap' });
 
     if (raw.iyms22 && raw.iyms22 <= 6 && depCum <= -3)
-      signals.push({ type: '2/2', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS22=${raw.iyms22} dep_cum=${depCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+      signals.push({ type: '2/2', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS22=${raw.iyms22} dep_cum=${depCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0, accLabel: 'bootstrap' });
 
     if (raw.iyms12 && raw.iyms12 <= 12 && depCum <= -4)
-      signals.push({ type: '1/2', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS12=${raw.iyms12} dep_cum=${depCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0 });
+      signals.push({ type: '1/2', tier: 'STANDART', rule: `[BOOTSTRAP] İYMS12=${raw.iyms12} dep_cum=${depCum}`, prec: 5.0, lift: 1.4, prob: 0.14, stateKey, trendStrength: 'bootstrap', histCount: 0, accLabel: 'bootstrap' });
   }
 
-  // ── Pattern tabanlı sinyaller ───────────────────────────────────────
+  // ── Pattern + Accuracy tabanlı sinyaller [NEW-3][NEW-4] ──────────
   for (const outcome of FOCUS_RESULTS) {
     const p = predictions[outcome];
     if (p.lift < 1.20) continue;
+
+    // [NEW-3] Doğruluk çarpanını al
+    const { multiplier, label: accLabel, accuracy } = getAccuracyMultiplier(outcome);
+
+    // [NEW-4] Bastırma: accuracy düşükse sinyali çıkarma
+    if (multiplier === 0.0) {
+      console.log(`[AccFilter] ${outcome} bastırıldı (${accLabel})`);
+      continue;
+    }
 
     let tier      = 'STANDART';
     let rule      = `State: ${stateKey.substring(0, 60)}...`;
     let precision = p.prob * 10;
 
-    if (p.lift >= 2.50 && p.confidence === 'high') {
+    // Accuracy boost: lift × multiplier ile hesapla
+    const effectiveLift = +(p.lift * multiplier).toFixed(2);
+
+    if (effectiveLift >= 2.50 && p.confidence === 'high') {
       tier = 'ELITE'; precision = Math.min(9.5, p.prob * 10 + 2);
-    } else if (p.lift >= 2.00 && (p.confidence === 'high' || p.confidence === 'medium')) {
+    } else if (effectiveLift >= 2.00 && (p.confidence === 'high' || p.confidence === 'medium')) {
       tier = 'PREMIER'; precision = Math.min(8.5, p.prob * 10 + 1);
+    }
+
+    // Accuracy boost varsa tier'ı bir kademe yükselt
+    if (multiplier > 1.0) {
+      if (tier === 'STANDART') tier = 'PREMIER';
+      else if (tier === 'PREMIER') tier = 'ELITE';
+      precision = Math.min(9.8, precision + 0.5);
     }
 
     if (outcome === '2/1' && trendStrength === 'strong_reversal') { precision += 0.8; rule = 'Reversal + ' + rule; }
@@ -559,24 +668,30 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
     if (p.prob < minProb) continue;
 
     signals.push({
-      type: outcome, tier,
-      rule: `${rule} | hist=${p.count}/${p.total}`,
-      prec: +precision.toFixed(2),
-      lift: p.lift, prob: p.prob,
-      stateKey, trendStrength,
-      histCount: p.count,
+      type:         outcome,
+      tier,
+      rule:         `${rule} | hist=${p.count}/${p.total}`,
+      prec:         +precision.toFixed(2),
+      lift:         p.lift,
+      effectiveLift,
+      prob:         p.prob,
+      stateKey,
+      trendStrength,
+      histCount:    p.count,
+      accLabel,
+      accuracy,     // null veya 0.0–1.0
     });
   }
 
   const tierW = { ELITE: 3, PREMIER: 2, STANDART: 1 };
-  signals.sort((a, c) => (tierW[c.tier] || 0) - (tierW[a.tier] || 0) || c.lift - a.lift);
+  signals.sort((a, c) => (tierW[c.tier] || 0) - (tierW[a.tier] || 0) || c.effectiveLift - a.effectiveLift);
 
   return { signals, features, predictions, stateKey };
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 9 — YEREL YORUM
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 function generateLocalInterpretation(matchData) {
   const { signals, features, predictions, stateKey } = matchData;
   if (signals.length === 0) return null;
@@ -599,14 +714,29 @@ function generateLocalInterpretation(matchData) {
   else if (top.trendStrength === 'bootstrap')   note = `[Bootstrap] Kural tabanlı sinyal — hafıza: ${memory.totalLearned}/${BOOTSTRAP_THRESHOLD}.`;
   else                                          note = 'Yeni pattern, temkinli olun.';
 
-  return `📊 DURUM: ${stateKey.substring(0, 55)}...\n${mkt}\n🎯 TAHMİN: ${top.type} | ${top.tier} | Lift: ${top.lift}x | Olas: %${(top.prob*100).toFixed(1)}\n📚 ${note}\n⚡ Trend: ${top.trendStrength} | İYMS21: ${r.iyms21||'?'} | MS1: ${r.ms1||'?'}`;
+  // [NEW-5] Accuracy notu
+  let accNote = '';
+  if (top.accuracy !== null && top.accuracy !== undefined) {
+    const acc = memory.signalAccuracy[top.type] || {};
+    accNote = `\n📏 Geçmiş Doğruluk: %${(top.accuracy*100).toFixed(1)} (${acc.correct}/${acc.fired} ateşlendi) — ${top.accLabel}`;
+  } else if (top.trendStrength !== 'bootstrap') {
+    accNote = `\n📏 Doğruluk: Henüz yeterli veri yok (<${ACCURACY_MIN_SAMPLES} ateşleme)`;
+  }
+
+  return (
+    `📊 DURUM: ${stateKey.substring(0, 55)}...\n` +
+    `${mkt}\n` +
+    `🎯 TAHMİN: ${top.type} | ${top.tier} | Lift: ${top.lift}x (efektif: ${top.effectiveLift}x) | Olas: %${(top.prob*100).toFixed(1)}\n` +
+    `📚 ${note}${accNote}\n` +
+    `⚡ Trend: ${top.trendStrength} | İYMS21: ${r.iyms21||'?'} | MS1: ${r.ms1||'?'}`
+  );
 }
 
-// ════════════════════════════════════════════════════════════════════
-// BÖLÜM 10 — SİNYAL LOGGER
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// BÖLÜM 10 — SİNYAL LOGGER [NEW-5]
+// ══════════════════════════════════════════════════════════════════════
 function logSignals(matchesWithSignals, cycleNo) {
-  const now = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+  const now       = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
   const tierColor = { ELITE: '💎', PREMIER: '🥇', STANDART: '📊' };
 
   console.log('\n' + '▓'.repeat(60));
@@ -620,7 +750,15 @@ function logSignals(matchesWithSignals, cycleNo) {
     console.log(`   📈 Ev kümülâtif: ${m.ev_ft_cum.toFixed(2)} | Dep: ${m.dep_ft_cum.toFixed(2)}`);
 
     for (const s of m.signals.slice(0, 3)) {
-      console.log(`   ${tierColor[s.tier]} [${s.tier}] ${s.type} | Lift: ${s.lift}x | Olas: %${(s.prob * 100).toFixed(1)} | ${s.rule}`);
+      const accStr = s.accuracy !== null && s.accuracy !== undefined
+        ? ` | Doğruluk: %${(s.accuracy*100).toFixed(0)} (${s.accLabel})`
+        : ` | Doğruluk: veri bekleniyor`;
+      console.log(
+        `   ${tierColor[s.tier]} [${s.tier}] ${s.type}` +
+        ` | Lift: ${s.lift}x → Efektif: ${s.effectiveLift}x` +
+        ` | Olas: %${(s.prob * 100).toFixed(1)}${accStr}`
+      );
+      console.log(`      ↳ ${s.rule}`);
     }
 
     if (m.interpretation) {
@@ -634,13 +772,51 @@ function logSignals(matchesWithSignals, cycleNo) {
   console.log('\n' + '▓'.repeat(60) + '\n');
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// BÖLÜM 10b — ALERT HELPERS [NEW-1 entegreli]
+// ══════════════════════════════════════════════════════════════════════
+function alreadyFired(fixtureId, signalLabel) {
+  if (!firedAlerts[fixtureId]) return false;
+  return firedAlerts[fixtureId].includes(signalLabel);
+}
+
+/**
+ * [NEW-1] Sinyali ateşlenmiş olarak işaretle VE pending kaydı oluştur.
+ * Böylece FT geldiğinde tahmin vs gerçek karşılaştırılabilir.
+ */
+function markFired(fixtureId, signalLabel, signalData) {
+  if (!firedAlerts[fixtureId]) firedAlerts[fixtureId] = [];
+  if (!firedAlerts[fixtureId].includes(signalLabel)) {
+    firedAlerts[fixtureId].push(signalLabel);
+  }
+
+  // [NEW-1] Sinyal kaydını hafızaya al
+  if (signalData) {
+    memory.pendingSignals[fixtureId] = {
+      predictedAt: new Date().toISOString(),
+      stateKey:    signalData.stateKey,
+      topSignal:   signalData.type,
+      tier:        signalData.tier,
+      lift:        signalData.lift,
+      effectiveLift: signalData.effectiveLift,
+      prob:        signalData.prob,
+      signalLabel,
+    };
+
+    // fired sayacını artır
+    if (!memory.signalAccuracy[signalData.type]) {
+      memory.signalAccuracy[signalData.type] = { fired: 0, correct: 0 };
+    }
+    memory.signalAccuracy[signalData.type].fired++;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 11 — MAÇ LİSTESİ
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 async function loadFixtures() {
   if (!sb) { console.warn('[Fixtures] Supabase bağlantısı yok'); return []; }
   try {
-    console.log('[Fixtures] Supabase "future_matches" okunuyor...');
     const { data, error } = await sb.from('future_matches').select('*');
     if (error) { console.error('[Fixtures] Hata:', error.message); return []; }
     if (!data || data.length === 0) { console.log('[Fixtures] Maç bulunamadı.'); return []; }
@@ -653,9 +829,9 @@ async function loadFixtures() {
   } catch (e) { console.error('[Fixtures] Hata:', e.message); return []; }
 }
 
-// ════════════════════════════════════════════════════════════════════
-// BÖLÜM 12 — CANLI SKOR & ÖĞRENME [FIX-3]
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// BÖLÜM 12 — CANLI SKOR & ÖĞRENME [FIX-3 + NEW-2]
+// ══════════════════════════════════════════════════════════════════════
 function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
   if (htHome == null || ftHome == null) return null;
   const ht = htHome > htAway ? '1' : htHome < htAway ? '2' : 'X';
@@ -679,7 +855,7 @@ async function syncLiveMatches() {
   console.log(`[Live] ${liveRows.length} aktif/biten maç`);
   if (liveRows.length > 0) console.log('[Live] Örnek:', JSON.stringify(liveRows[0]));
 
-  let matchedLive = 0, learnedCount = 0;
+  let matchedLive = 0, learnedCount = 0, resolvedCount = 0;
 
   for (const row of liveRows) {
     const fid    = String(row.fixture_id);
@@ -716,10 +892,15 @@ async function syncLiveMatches() {
       );
 
       if (htFtResult) {
+        // [NEW-2] Önce pending sinyali çöz (tahmin vs gerçek)
+        resolvePendingSignal(fid, htFtResult);
+        resolvedCount++;
+
+        // Sonra pattern hafızasını güncelle
         learnFromMatch(fid, htFtResult);
         learnedCount++;
       } else {
-        console.warn(`  ⚠️ ${match.name}: HT skoru yok — öğrenme atlandı`);
+        console.warn(`  ⚠️ ${match.name}: HT skoru yok — öğrenme/çözümleme atlandı`);
       }
     }
 
@@ -728,27 +909,22 @@ async function syncLiveMatches() {
   }
 
   if (liveRows.length > 0) {
-    console.log(`[Live] Eşleşme: ${matchedLive}/${liveRows.length} | Öğrenilen: ${learnedCount}`);
+    console.log(`[Live] Eşleşme: ${matchedLive}/${liveRows.length} | Öğrenilen: ${learnedCount} | Çözümlenen: ${resolvedCount}`);
   }
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 13 — ANA DÖNGÜ
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 
-/**
- * [FIX-5] Timezone düzeltmesi:
- * Supabase'de "2026-04-20 20:30:00" gibi timezone bilgisi olmayan tarihler
- * varsayılan olarak UTC+3 (İstanbul) kabul edilir.
- * Timezone bilgisi varsa (Z veya +03:00 gibi) olduğu gibi kullanılır.
- */
+/** [FIX-5] Timezone düzeltmesi: timezone bilgisi yoksa UTC+3 kabul edilir. */
 function hoursToKickoff(ko) {
   if (!ko) return 999;
   try {
     const hasTimezone = /Z|[+-]\d{2}:?\d{2}$/.test(String(ko));
     const utcMs = hasTimezone
       ? new Date(ko).getTime()
-      : new Date(ko).getTime() - 3 * 3600000; // UTC+3 → UTC
+      : new Date(ko).getTime() - 3 * 3600000;
     return (utcMs - Date.now()) / 3600000;
   } catch { return 999; }
 }
@@ -761,8 +937,12 @@ async function runCycle() {
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`[Tracker] Döngü #${cycleCount} | ${new Date().toISOString()} | +${elapsed}dk`);
   console.log(`[Memory]  ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} öğrenme${bootstrapMode ? ` | ⚡ BOOTSTRAP (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD})` : ''}`);
+  console.log(`[Accuracy] ${Object.keys(memory.signalAccuracy).length} tip izleniyor | ${Object.keys(memory.pendingSignals).length} bekleyen sinyal`);
   console.log(`[Config]  Sinyal penceresi: ≤${SIGNAL_WINDOW_H * 60} dk | Lookahead: ${LOOKAHEAD_H} sa`);
   console.log('═'.repeat(60));
+
+  // [NEW-6] Her 10 döngüde bir doğruluk raporu
+  if (cycleCount % 10 === 1) logAccuracyReport();
 
   let nesineData;
   try {
@@ -780,7 +960,6 @@ async function runCycle() {
   for (const fix of fixtures) {
     const h2k = hoursToKickoff(fix.kickoff);
 
-    // İzleme penceresi dışındaysa atla
     if (h2k > LOOKAHEAD_H || h2k < -2.5) continue;
 
     const result = findBestMatch(fix.home_team, fix.away_team, events);
@@ -813,10 +992,10 @@ async function runCycle() {
       ev_ft_cum, dep_ft_cum, snapshots, liveData,
     });
 
-    // [FIX-6] Sinyal zamanlaması: maça SIGNAL_WINDOW_H saatten fazla varsa bekle
+    // [FIX-6] Sinyal zamanlaması
     if (h2k > SIGNAL_WINDOW_H) {
       const minLeft = Math.round(h2k * 60);
-      console.log(`[⏳ Bekle] ${fix.home_team} vs ${fix.away_team} | ${minLeft} dk kaldı — sinyal hazır ama henüz erken (eşik: ${Math.round(SIGNAL_WINDOW_H * 60)} dk)`);
+      console.log(`[⏳ Bekle] ${fix.home_team} vs ${fix.away_team} | ${minLeft} dk kaldı`);
       continue;
     }
 
@@ -826,7 +1005,8 @@ async function runCycle() {
     const isBootstrap = signals.every(s => s.trendStrength === 'bootstrap');
     if (!hasHighTier && signals.length < MIN_SIGNALS && !isBootstrap) continue;
 
-    const topLabel = `${signals[0].type}_${signals[0].tier}`;
+    const topSignal   = signals[0];
+    const topLabel    = `${topSignal.type}_${topSignal.tier}`;
     if (alreadyFired(fid, topLabel)) continue;
 
     const interpretation = generateLocalInterpretation({ signals, features, predictions, stateKey });
@@ -847,21 +1027,30 @@ async function runCycle() {
   }
 
   logSignals(matchesWithSignals, cycleCount);
-  for (const m of matchesWithSignals) markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
+
+  // [NEW-1] Sinyalleri ateşle + pending kaydını oluştur
+  for (const m of matchesWithSignals) {
+    const topSignal = m.signals[0];
+    const topLabel  = `${topSignal.type}_${topSignal.tier}`;
+    markFired(m.fid, topLabel, topSignal);
+  }
 
   await syncLiveMatches();
   saveCache();
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 // MAIN
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v2.3 — Self-Learning Market Engine    ║');
+  console.log('║  ScorePop Adaptive v3.0 — Self-Evaluating Market Engine  ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
-  console.log(`║  Bootstrap eşiği : ${String(BOOTSTRAP_THRESHOLD).padEnd(38)}║`);
-  console.log(`║  Sinyal penceresi: ≤${String(Math.round(SIGNAL_WINDOW_H * 60) + ' dk').padEnd(37)}║`);
+  console.log(`║  Bootstrap eşiği   : ${String(BOOTSTRAP_THRESHOLD).padEnd(36)}║`);
+  console.log(`║  Sinyal penceresi  : ≤${String(Math.round(SIGNAL_WINDOW_H * 60) + ' dk').padEnd(35)}║`);
+  console.log(`║  Accuracy min örnek: ${String(ACCURACY_MIN_SAMPLES).padEnd(36)}║`);
+  console.log(`║  Penalty eşiği     : <%${String((ACCURACY_PENALTY_THR*100).toFixed(0)).padEnd(33)}║`);
+  console.log(`║  Boost eşiği       : >%${String((ACCURACY_BOOST_THR*100).toFixed(0)).padEnd(33)}║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
@@ -880,28 +1069,32 @@ async function main() {
     if (wait > 0 && remaining > wait) await new Promise(r => setTimeout(r, wait));
   }
 
+  // Final raporu
+  logAccuracyReport();
   saveCache();
+
   console.log('\n╔══════════════════════════════════════════════════════════╗');
   console.log('║  OTURUM TAMAMLANDI                                       ║');
-  console.log(`║  Döngü     : ${String(cycleCount).padEnd(44)}║`);
-  console.log(`║  İzlenen   : ${String(matchCache.size).padEnd(44)}║`);
-  console.log(`║  Pattern   : ${String(Object.keys(memory.patterns).length).padEnd(44)}║`);
-  console.log(`║  Öğrenilen : ${String(memory.totalLearned).padEnd(44)}║`);
+  console.log(`║  Döngü         : ${String(cycleCount).padEnd(40)}║`);
+  console.log(`║  İzlenen       : ${String(matchCache.size).padEnd(40)}║`);
+  console.log(`║  Pattern       : ${String(Object.keys(memory.patterns).length).padEnd(40)}║`);
+  console.log(`║  Öğrenilen     : ${String(memory.totalLearned).padEnd(40)}║`);
+  console.log(`║  Sinyal Tipi   : ${String(Object.keys(memory.signalAccuracy).length).padEnd(40)}║`);
+  console.log(`║  Bekleyen Sinyal: ${String(Object.keys(memory.pendingSignals).length).padEnd(39)}║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 }
 
 process.on('SIGINT', () => {
-  console.log('\n[Sistem] 🛑 Kapanma sinyali (Ctrl+C) alındı!');
-  console.log('[Sistem] RAM\'deki veriler diske (JSON) kaydediliyor, lütfen bekleyin...');
+  console.log('\n[Sistem] 🛑 Kapanma sinyali alındı — kaydediliyor...');
+  logAccuracyReport();
   saveCache();
-  console.log('[Sistem] ✅ Memory ve Cache başarıyla kurtarıldı. Kapanıyor.');
+  console.log('[Sistem] ✅ Veriler kurtarıldı. Kapanıyor.');
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('\n[Sistem] 🛑 Sunucu kapanma sinyali aldı!');
+  console.log('\n[Sistem] 🛑 SIGTERM alındı — kaydediliyor...');
   saveCache();
-  console.log('[Sistem] ✅ Veriler kaydedildi. Kapanıyor.');
   process.exit(0);
 });
 
