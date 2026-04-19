@@ -538,15 +538,15 @@ function generateLocalInterpretation(matchData) {
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 10 — E-POSTA
 // ════════════════════════════════════════════════════════════════════
-function createTransport() {
-  return nodemailer.createTransport({
-    host:   process.env.SMTP_HOST || 'smtp.gmail.com',
-    port:   parseInt(process.env.SMTP_PORT || '587'),
-    secure: process.env.SMTP_PORT === '465',
-    auth:   { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
-}
+// Transporter'ı dışarıda SADECE BİR KERE oluşturuyoruz (Soket sızıntısını önler)
+const mailTransporter = nodemailer.createTransport({
+  host:   process.env.SMTP_HOST || 'smtp.gmail.com',
+  port:   parseInt(process.env.SMTP_PORT || '587'),
+  secure: process.env.SMTP_PORT === '465',
+  auth:   { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+});
 
+// buildEmailHTML fonksiyonun AYNI KALACAK
 function buildEmailHTML(matchesWithSignals, cycleNo) {
   const now       = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
   const tierColor = { ELITE: '#c0392b', PREMIER: '#e67e22', STANDART: '#2980b9' };
@@ -564,8 +564,8 @@ function buildEmailHTML(matchesWithSignals, cycleNo) {
 
     const feat = m.features?.buckets;
     const momentumBars = `<div style="margin-top:6px;font-size:11px;color:#666;">
-      <span style="color:${feat.ev_momentum==='falling'?'#e74c3c':'#27ae60'}">● Ev FT: ${feat.ev_ft_sign} (${feat.ev_momentum})</span>&nbsp;|&nbsp;
-      <span style="color:${feat.dep_momentum==='rising'?'#e74c3c':'#27ae60'}">● Dep FT: ${feat.dep_ft_sign} (${feat.dep_momentum})</span></div>`;
+      <span style="color:${feat?.ev_momentum==='falling'?'#e74c3c':'#27ae60'}">● Ev FT: ${feat?.ev_ft_sign} (${feat?.ev_momentum})</span>&nbsp;|&nbsp;
+      <span style="color:${feat?.dep_momentum==='rising'?'#e74c3c':'#27ae60'}">● Dep FT: ${feat?.dep_ft_sign} (${feat?.dep_momentum})</span></div>`;
 
     const bootstrapBadge = top.trendStrength === 'bootstrap'
       ? `<span style="background:#95a5a6;color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;margin-left:4px;">BOOTSTRAP</span>` : '';
@@ -607,14 +607,24 @@ function buildEmailHTML(matchesWithSignals, cycleNo) {
 }
 
 async function sendEmail(subject, html) {
-  const to = process.env.MAIL_TO || '';
-  if (!to) { console.warn('[Mail] MAIL_TO tanımlı değil'); return false; }
+  // Hedef e-posta adresi doğrudan tanımlandı
+  const to = 'bcsezgin1@gmail.com';
+  
   if (DRY_RUN) { console.log(`[DRY_RUN] Mail atılmadı: ${subject}`); return true; }
+  
   try {
-    const info = await createTransport().sendMail({ from: `"ScorePop AI" <${process.env.SMTP_USER}>`, to, subject, html });
+    const info = await mailTransporter.sendMail({ 
+      from: `"ScorePop AI" <${process.env.SMTP_USER}>`, 
+      to, 
+      subject, 
+      html 
+    });
     console.log(`[Mail] ✅ ${to} (${info.messageId})`);
     return true;
-  } catch (e) { console.error('[Mail] Hata:', e.message); return false; }
+  } catch (e) { 
+    console.error('[Mail] Hata:', e.message); 
+    return false; 
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
