@@ -77,15 +77,30 @@ function loadCache() {
 function saveCache() {
   const obj = { savedAt: new Date().toISOString(), matchCache: {} };
   for (const [fid, val] of matchCache.entries()) obj.matchCache[fid] = val;
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(obj, null, 2));
-  fs.writeFileSync(FIRED_FILE, JSON.stringify(firedAlerts, null, 2));
+  fs.writeFileSync(CACHE_FILE,  JSON.stringify(obj,    null, 2));
+  fs.writeFileSync(FIRED_FILE,  JSON.stringify(firedAlerts, null, 2));
   fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+
+  // Git'e kaydet (arka planda, hata olursa döngüyü durdurmaz)
+  pushToGit();
 }
 
-function alreadyFired(fid, label) { return (firedAlerts[fid] || []).includes(label); }
-function markFired(fid, label) {
-  firedAlerts[fid] = firedAlerts[fid] || [];
-  if (!firedAlerts[fid].includes(label)) firedAlerts[fid].push(label);
+function pushToGit() {
+  const { execSync } = require('child_process');
+  try {
+    execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
+
+    // Değişiklik var mı kontrol et
+    const status = execSync('git status --porcelain', { stdio: 'pipe' }).toString().trim();
+    if (!status) { console.log('[Git] Değişiklik yok, commit atlandı.'); return; }
+
+    const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')} | learned=${memory.totalLearned} patterns=${Object.keys(memory.patterns).length}`;
+    execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
+    execSync('git push',               { stdio: 'pipe' });
+    console.log(`[Git] ✅ Push başarılı — ${msg}`);
+  } catch (e) {
+    console.warn('[Git] Push hatası (önemli değil):', e.message.split('\n')[0]);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -536,95 +551,35 @@ function generateLocalInterpretation(matchData) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 10 — E-POSTA
+// BÖLÜM 10 — SİNYAL LOGGER (Mail kaldırıldı)
 // ════════════════════════════════════════════════════════════════════
-// Transporter'ı dışarıda SADECE BİR KERE oluşturuyoruz (Soket sızıntısını önler)
-const mailTransporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST || 'smtp.gmail.com',
-  port:   parseInt(process.env.SMTP_PORT || '587'),
-  secure: process.env.SMTP_PORT === '465',
-  auth:   { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-});
+function logSignals(matchesWithSignals, cycleNo) {
+  const now = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+  const tierColor = { ELITE: '💎', PREMIER: '🥇', STANDART: '📊' };
 
-// buildEmailHTML fonksiyonun AYNI KALACAK
-function buildEmailHTML(matchesWithSignals, cycleNo) {
-  const now       = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
-  const tierColor = { ELITE: '#c0392b', PREMIER: '#e67e22', STANDART: '#2980b9' };
-  const typeEmoji = { '1/1': '🟡', '2/2': '🟣', '2/1': '🟢', '1/2': '🔵' };
+  console.log('\n' + '▓'.repeat(60));
+  console.log(`  SİNYAL RAPORU — Döngü #${cycleNo} | ${now}`);
+  console.log('▓'.repeat(60));
 
-  const matchBlocks = matchesWithSignals.map(m => {
-    const top     = m.signals[0];
-    const allSigs = m.signals.slice(0, 3).map(s =>
-      `<span style="display:inline-block;background:${tierColor[s.tier]};color:#fff;padding:3px 8px;border-radius:4px;font-size:12px;margin:2px;">${s.type} %${(s.prob*100).toFixed(0)} (lift ${s.lift}x)</span>`
-    ).join(' ');
+  for (const m of matchesWithSignals) {
+    const top = m.signals[0];
+    console.log(`\n${tierColor[top.tier] || '⚪'} ${m.name}`);
+    console.log(`   ⏰ Başlangıç: ${m.h2k < 1 ? 'Başladı' : m.h2k.toFixed(1) + ' saat sonra'}`);
+    console.log(`   📈 Ev kümülâtif: ${m.ev_ft_cum.toFixed(2)} | Dep: ${m.dep_ft_cum.toFixed(2)}`);
 
-    const localInsight = m.interpretation
-      ? `<div style="background:#f8f9fa;border-left:3px solid ${tierColor[top.tier]};padding:10px;margin-top:8px;font-size:12px;color:#444;white-space:pre-wrap;">${m.interpretation.replace(/\n/g,'<br>')}</div>`
-      : '';
+    for (const s of m.signals.slice(0, 3)) {
+      console.log(`   ${tierColor[s.tier]} [${s.tier}] ${s.type} | Lift: ${s.lift}x | Olas: %${(s.prob * 100).toFixed(1)} | ${s.rule}`);
+    }
 
-    const feat = m.features?.buckets;
-    const momentumBars = `<div style="margin-top:6px;font-size:11px;color:#666;">
-      <span style="color:${feat?.ev_momentum==='falling'?'#e74c3c':'#27ae60'}">● Ev FT: ${feat?.ev_ft_sign} (${feat?.ev_momentum})</span>&nbsp;|&nbsp;
-      <span style="color:${feat?.dep_momentum==='rising'?'#e74c3c':'#27ae60'}">● Dep FT: ${feat?.dep_ft_sign} (${feat?.dep_momentum})</span></div>`;
-
-    const bootstrapBadge = top.trendStrength === 'bootstrap'
-      ? `<span style="background:#95a5a6;color:#fff;font-size:10px;padding:2px 5px;border-radius:3px;margin-left:4px;">BOOTSTRAP</span>` : '';
-
-    return `<div style="border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:14px;background:#fff;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-weight:bold;font-size:15px;color:#2c3e50;">${typeEmoji[top.type]||'⚪'} ${m.name}${bootstrapBadge}</div>
-        <div style="font-size:12px;color:#7f8c8d;">${m.h2k < 1 ? '⏳ Başladı' : '🔜 '+m.h2k.toFixed(1)+' saat'}</div>
-      </div>
-      <div style="margin:8px 0;">${allSigs}</div>
-      ${momentumBars}
-      <div style="margin-top:6px;font-size:11px;color:#555;">
-        Hafıza: ${top.histCount||0} örnek | <code style="background:#ecf0f1;padding:2px 4px;border-radius:3px;">${top.stateKey?.substring(0,40)}...</code>
-      </div>
-      ${localInsight}</div>`;
-  }).join('');
-
-  const memStats = Object.values(memory.patterns).reduce((acc,p) => {
-    const t = FOCUS_RESULTS.reduce((s,r) => s+(p[r]?.count||0),0);
-    if(t>0){ acc.patterns++; acc.totalSamples+=t; }
-    return acc;
-  },{ patterns:0, totalSamples:0 });
-
-  const bootstrapWarning = !(memory.totalLearned >= BOOTSTRAP_THRESHOLD)
-    ? `<div style="background:#d5f5e3;border-left:4px solid #2ecc71;padding:12px;margin-bottom:16px;font-size:12px;border-radius:4px;">🌱 <b>Bootstrap modu aktif</b> — ${memory.totalLearned}/${BOOTSTRAP_THRESHOLD} maç öğrenildi.</div>` : '';
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>ScorePop</title></head>
-<body style="font-family:'Segoe UI',Arial,sans-serif;max-width:800px;margin:0 auto;padding:16px;background:#f5f6fa;color:#2c3e50;">
-  <div style="background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);color:#fff;padding:22px;border-radius:10px;margin-bottom:18px;">
-    <h1 style="margin:0;font-size:20px;">🧠 ScorePop Adaptive — v2.2</h1>
-    <p style="margin:6px 0 0;opacity:.85;font-size:13px;">Döngü #${cycleNo} | ${now} | ${memStats.patterns} pattern | ${memStats.totalSamples} örnek</p>
-  </div>
-  ${bootstrapWarning}
-  <p style="color:#7f8c8d;font-size:13px;margin-bottom:12px;"><b>${matchesWithSignals.length}</b> maçta sinyal tespit edildi.</p>
-  ${matchBlocks}
-  <div style="background:#ffeaa7;padding:12px;border-radius:6px;font-size:11px;margin-top:8px;">⚠️ Sistem oran hareketleri ile sonuçları eşleştirerek olasılık üretir. Her zaman kendi değerlendirmenizi yapın.</div>
-  <p style="font-size:11px;color:#bdc3c7;margin-top:10px;text-align:right;">ScorePop Adaptive v2.2</p>
-</body></html>`;
-}
-
-async function sendEmail(subject, html) {
-  // Hedef e-posta adresi doğrudan tanımlandı
-  const to = 'bcsezgin1@gmail.com';
-  
-  if (DRY_RUN) { console.log(`[DRY_RUN] Mail atılmadı: ${subject}`); return true; }
-  
-  try {
-    const info = await mailTransporter.sendMail({ 
-      from: `"ScorePop AI" <${process.env.SMTP_USER}>`, 
-      to, 
-      subject, 
-      html 
-    });
-    console.log(`[Mail] ✅ ${to} (${info.messageId})`);
-    return true;
-  } catch (e) { 
-    console.error('[Mail] Hata:', e.message); 
-    return false; 
+    if (m.interpretation) {
+      console.log('   ─────────────────────────────────');
+      for (const line of m.interpretation.split('\n')) {
+        if (line.trim()) console.log('   ' + line);
+      }
+    }
   }
+
+  console.log('\n' + '▓'.repeat(60) + '\n');
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -831,14 +786,9 @@ async function runCycle() {
     return;
   }
 
-  const eliteCount = matchesWithSignals.filter(m => m.signals[0].tier === 'ELITE').length;
-  const subject = eliteCount > 0
-    ? `💎 ScorePop Adaptive [${eliteCount} ELITE] — ${matchesWithSignals.map(m => m.signals[0].type).join(', ')}`
-    : `🧠 ScorePop Adaptive — ${matchesWithSignals.length} Maç Sinyali`;
-
-  const html = buildEmailHTML(matchesWithSignals, cycleCount);
-  const sent = await sendEmail(subject, html);
-  if (sent) for (const m of matchesWithSignals) markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
+    // YENİ:
+  logSignals(matchesWithSignals, cycleCount);
+  for (const m of matchesWithSignals) markFired(m.fid, `${m.signals[0].type}_${m.signals[0].tier}`);
 
   await syncLiveMatches();
   saveCache();
