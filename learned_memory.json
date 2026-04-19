@@ -141,8 +141,14 @@
         "count": 1,
         "firstSeen": "2026-04-19T16:54:53.283Z"
       }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_vhigh": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-19T17:49:52.824Z"
+      }
     }
   },
   "version": 2,
-  "totalLearned": 29
+  "totalLearned": 30
 }
