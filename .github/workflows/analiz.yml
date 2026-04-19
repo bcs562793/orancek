@@ -115,5 +115,5 @@ jobs:
           path: |
             tracker_cache.json
             fired_alerts.json
-            
+            learned_memory.json
           retention-days: 7
