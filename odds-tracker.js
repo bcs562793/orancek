@@ -232,16 +232,17 @@ function saveCache() {
 
 function pushToGit() {
   const { execSync } = require('child_process');
-  console.log('[Git] 🔄 Otomatik yedekleme başlatılıyor...');
   try {
     execSync('git config user.email "scorepop@bot.com"', { stdio: 'pipe' });
-    execSync('git config user.name "ScorePop Bot"', { stdio: 'pipe' });
+    execSync('git config user.name "ScorePop Bot"',      { stdio: 'pipe' });
     execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
     const staged = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
-    if (!staged) { console.log('[Git] ⏩ Değişiklik yok, commit atlandı.'); return; }
-    const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')} | learned=${memory.totalLearned} acc_records=${Object.keys(memory.signalAccuracy).length}`;
+    if (!staged) { console.log('[Git] ⏩ Değişiklik yok.'); return; }
+    const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
     execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
-    execSync('git push origin main', { stdio: 'pipe' });
+    // ← Pull + rebase ekle
+    execSync('git pull --rebase origin main', { stdio: 'pipe' });
+    execSync('git push origin main',           { stdio: 'pipe' });
     console.log('[Git] ✅ Push başarılı.');
   } catch (e) {
     if (e.stderr) console.warn('[Git] STDERR:', e.stderr.toString().trim());
