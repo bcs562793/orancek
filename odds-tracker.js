@@ -821,15 +821,27 @@ async function loadFixtures() {
     const { data, error } = await sb.from('future_matches').select('*');
     if (error) { console.error('[Fixtures] Hata:', error.message); return []; }
     if (!data || data.length === 0) { console.log('[Fixtures] Maç bulunamadı.'); return []; }
-    return data.map(r => ({
-      fixture_id: String(r.fixture_id || r.id),
-      home_team:  r.home_team || r.data?.teams?.home?.name || '',
-      away_team:  r.away_team || r.data?.teams?.away?.name || '',
-      kickoff:    r.date || r.kickoff || null,
-    })).filter(r => r.home_team && r.away_team);
+    
+    return data.map(r => {
+      // data sütunu JSON string ise parse et
+      let parsed = {};
+      try {
+        parsed = typeof r.data === 'string' ? JSON.parse(r.data) : (r.data || {});
+      } catch { parsed = {}; }
+
+      // Gerçek kickoff: önce data.fixture.date, yoksa r.date
+      const kickoff = parsed?.fixture?.date || r.date || r.kickoff || null;
+
+      return {
+        fixture_id: String(r.fixture_id || r.id),
+        home_team:  parsed?.teams?.home?.name || r.home_team || '',
+        away_team:  parsed?.teams?.away?.name || r.away_team || '',
+        kickoff,
+      };
+    }).filter(r => r.home_team && r.away_team);
+
   } catch (e) { console.error('[Fixtures] Hata:', e.message); return []; }
 }
-
 // ══════════════════════════════════════════════════════════════════════
 // BÖLÜM 12 — CANLI SKOR & ÖĞRENME [FIX-3 + NEW-2]
 // ══════════════════════════════════════════════════════════════════════
