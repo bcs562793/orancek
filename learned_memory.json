@@ -4,6 +4,14 @@
       "1/1": {
         "count": 1,
         "firstSeen": "2026-04-19T02:38:39.809Z"
+      },
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T17:57:29.064Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T18:57:29.352Z"
       }
     },
     "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
@@ -16,16 +24,20 @@
         "firstSeen": "2026-04-19T10:25:09.146Z"
       },
       "X/2": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-19T18:25:49.477Z"
       },
       "2/2": {
-        "count": 3,
+        "count": 5,
         "firstSeen": "2026-04-19T19:30:48.880Z"
       },
       "2/1": {
         "count": 1,
         "firstSeen": "2026-04-20T02:51:10.417Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T14:57:28.614Z"
       }
     },
     "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_low|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
@@ -46,11 +58,11 @@
     },
     "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
       "1/1": {
-        "count": 3,
+        "count": 4,
         "firstSeen": "2026-04-19T07:00:08.011Z"
       },
       "X/1": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-19T23:26:09.657Z"
       }
     },
@@ -62,6 +74,14 @@
       "X/2": {
         "count": 3,
         "firstSeen": "2026-04-19T08:55:08.710Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-20T19:27:46.141Z"
+      },
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T21:54:28.611Z"
       }
     },
     "ms1_high|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_low|au25_vhigh": {
@@ -90,7 +110,7 @@
     },
     "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
       "X/X": {
-        "count": 2,
+        "count": 3,
         "firstSeen": "2026-04-19T08:05:08.215Z"
       },
       "1/2": {
@@ -98,7 +118,7 @@
         "firstSeen": "2026-04-19T18:25:49.477Z"
       },
       "X/1": {
-        "count": 2,
+        "count": 3,
         "firstSeen": "2026-04-19T20:50:48.754Z"
       },
       "2/2": {
@@ -136,6 +156,10 @@
       "1/1": {
         "count": 1,
         "firstSeen": "2026-04-19T09:30:08.643Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T14:22:08.309Z"
       }
     },
     "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
@@ -150,7 +174,7 @@
     },
     "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_low": {
       "1/1": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-19T18:25:49.477Z"
       },
       "X/1": {
@@ -170,6 +194,10 @@
       "X/2": {
         "count": 1,
         "firstSeen": "2026-04-19T19:55:48.675Z"
+      },
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T12:02:08.213Z"
       }
     },
     "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
@@ -194,7 +222,7 @@
     },
     "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
       "1/1": {
-        "count": 2,
+        "count": 3,
         "firstSeen": "2026-04-19T18:25:49.478Z"
       },
       "X/1": {
@@ -236,7 +264,7 @@
     },
     "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_high": {
       "X/1": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-19T20:35:49.929Z"
       }
     },
@@ -258,7 +286,7 @@
         "firstSeen": "2026-04-19T21:25:48.721Z"
       },
       "1/1": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-20T00:26:09.561Z"
       }
     },
@@ -266,12 +294,40 @@
       "X/X": {
         "count": 1,
         "firstSeen": "2026-04-19T21:35:48.973Z"
+      },
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T18:52:29.206Z"
+      },
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T20:42:46.241Z"
+      },
+      "1/1": {
+        "count": 3,
+        "firstSeen": "2026-04-21T18:24:09.505Z"
       }
     },
     "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
       "X/2": {
-        "count": 1,
+        "count": 3,
         "firstSeen": "2026-04-19T21:35:48.973Z"
+      },
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T18:57:29.352Z"
+      },
+      "1/1": {
+        "count": 3,
+        "firstSeen": "2026-04-20T18:57:29.352Z"
+      },
+      "2/2": {
+        "count": 2,
+        "firstSeen": "2026-04-20T18:57:29.352Z"
+      },
+      "X/X": {
+        "count": 2,
+        "firstSeen": "2026-04-20T20:57:47.296Z"
       }
     },
     "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_low|au25_high": {
@@ -294,13 +350,17 @@
     },
     "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
       "X/1": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-20T00:51:10.173Z"
+      },
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T22:12:47.323Z"
       }
     },
     "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
       "1/1": {
-        "count": 1,
+        "count": 2,
         "firstSeen": "2026-04-20T01:16:09.990Z"
       }
     },
@@ -308,6 +368,14 @@
       "2/1": {
         "count": 1,
         "firstSeen": "2026-04-20T02:26:10.096Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T16:37:29.196Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T19:52:46.307Z"
       }
     },
     "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_high|au25_high": {
@@ -315,10 +383,771 @@
         "count": 1,
         "firstSeen": "2026-04-20T02:51:10.417Z"
       }
+    },
+    "ms1_low|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_vhigh": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T12:52:07.944Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_vhigh": {
+      "1/1": {
+        "count": 2,
+        "firstSeen": "2026-04-20T13:57:07.779Z"
+      },
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T14:57:28.614Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-20T14:57:28.614Z"
+      },
+      "1/1": {
+        "count": 2,
+        "firstSeen": "2026-04-20T17:52:29.355Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T15:02:28.332Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T15:37:28.074Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_low|au25_low": {
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T18:12:29.811Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T12:58:46.334Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_low|au25_vhigh": {
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T18:52:29.206Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_low": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-20T18:57:29.352Z"
+      },
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T13:38:45.784Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_low|au25_low": {
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T19:32:46.855Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_high": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-20T19:57:46.533Z"
+      }
+    },
+    "ms1_vlow|iy2_med|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-20T20:02:46.999Z"
+      }
+    },
+    "ms1_med|iy2_high|evft_flat|depft_flat|iyms21_high|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T20:42:46.241Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_neg|iyms21_med|evmom_rising|depmon_falling|div_no|ms2_med|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-20T21:17:47.103Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_pos|depft_neg|iyms21_med|evmom_rising|depmon_stable|div_no|ms2_med|au25_high": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-20T22:07:47.000Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_na": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T00:58:08.492Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T01:58:09.309Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T00:58:08.492Z"
+      },
+      "1/1": {
+        "count": 3,
+        "firstSeen": "2026-04-21T01:18:09.237Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T03:23:08.834Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_na": {
+      "X/X": {
+        "count": 2,
+        "firstSeen": "2026-04-21T01:28:09.791Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T17:59:09.300Z"
+      }
+    },
+    "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T01:28:09.792Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T21:59:28.256Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_vhigh": {
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T02:33:09.893Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T02:38:09.450Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T11:53:45.758Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T11:58:45.653Z"
+      },
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T14:54:08.067Z"
+      },
+      "2/2": {
+        "count": 2,
+        "firstSeen": "2026-04-21T15:59:08.977Z"
+      },
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T15:59:08.977Z"
+      },
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:04:28.245Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T12:28:45.401Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T12:33:46.039Z"
+      }
+    },
+    "ms1_vlow|iy2_med|evft_flat|depft_flat|iyms21_low|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T13:38:45.784Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_na": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T13:58:45.636Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_low": {
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T14:03:46.814Z"
+      }
+    },
+    "ms1_med|iy2_na|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_na": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T14:54:08.067Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T14:54:08.067Z"
+      }
+    },
+    "ms1_med|iy2_na|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_na": {
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T14:54:08.067Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_na": {
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T14:54:08.067Z"
+      },
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:59:08.703Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "X/1": {
+        "count": 2,
+        "firstSeen": "2026-04-21T15:59:08.977Z"
+      },
+      "2/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T18:49:09.141Z"
+      },
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      }
+    },
+    "ms1_vlow|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_na": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T15:59:08.977Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T15:59:08.977Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_low|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:24:08.541Z"
+      },
+      "2/2": {
+        "count": 2,
+        "firstSeen": "2026-04-21T16:59:08.703Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_neg|depft_flat|iyms21_med|evmom_falling|depmon_stable|div_no|ms2_med|au25_med": {
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:34:08.879Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_low|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:49:09.059Z"
+      },
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T18:54:09.434Z"
+      },
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      },
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:44:28.302Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:59:08.703Z"
+      }
+    },
+    "ms1_low|iy2_na|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_high": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:59:08.703Z"
+      }
+    },
+    "ms1_vlow|iy2_na|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T16:59:08.703Z"
+      }
+    },
+    "ms1_high|iy2_na|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_low|au25_na": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T17:04:08.522Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_low|au25_high": {
+      "1/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T17:04:08.522Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T17:24:08.807Z"
+      },
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      },
+      "X/1": {
+        "count": 2,
+        "firstSeen": "2026-04-21T20:44:28.301Z"
+      }
+    },
+    "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T17:54:08.917Z"
+      },
+      "2/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T17:59:09.301Z"
+      },
+      "X/2": {
+        "count": 3,
+        "firstSeen": "2026-04-21T18:09:09.253Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_high": {
+      "1/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T18:04:08.952Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_high": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T18:19:09.322Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T18:24:09.505Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_med|evmom_rising|depmon_stable|div_no|ms2_low|au25_low": {
+      "X/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T18:56:49.937Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_med|au25_high": {
+      "1/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T19:24:28.301Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_pos|depft_neg|iyms21_med|evmom_rising|depmon_falling|div_no|ms2_low|au25_med": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T19:34:28.106Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_pos|depft_flat|iyms21_med|evmom_rising|depmon_stable|div_no|ms2_low|au25_med": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T19:54:28.059Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_neg|iyms21_med|evmom_stable|depmon_falling|div_no|ms2_med|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:24:28.538Z"
+      }
+    },
+    "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_high": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:24:28.538Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_neg|iyms21_med|evmom_stable|depmon_falling|div_no|ms2_high|au25_med": {
+      "2/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:29:27.486Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_pos|depft_neg|iyms21_med|evmom_rising|depmon_stable|div_no|ms2_med|au25_low": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:29:27.486Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_neg|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      }
+    },
+    "ms1_high|iy2_low|evft_flat|depft_pos|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_low|au25_med": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_neg|depft_flat|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_med|au25_med": {
+      "2/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_neg|depft_pos|iyms21_med|evmom_falling|depmon_rising|div_yes|ms2_high|au25_med": {
+      "2/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:39:28.323Z"
+      }
+    },
+    "ms1_vlow|iy2_high|evft_flat|depft_neg|iyms21_low|evmom_stable|depmon_falling|div_no|ms2_high|au25_low": {
+      "X/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:44:28.301Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_neg|iyms21_med|evmom_stable|depmon_falling|div_no|ms2_med|au25_med": {
+      "2/X": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:44:28.301Z"
+      }
+    },
+    "ms1_low|iy2_med|evft_neg|depft_flat|iyms21_med|evmom_falling|depmon_stable|div_no|ms2_high|au25_med": {
+      "X/2": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:44:28.302Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_pos|iyms21_med|evmom_stable|depmon_rising|div_no|ms2_high|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:49:28.056Z"
+      }
+    },
+    "ms1_med|iy2_low|evft_flat|depft_pos|iyms21_med|evmom_stable|depmon_rising|div_no|ms2_med|au25_med": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:54:28.305Z"
+      }
+    },
+    "ms1_med|iy2_med|evft_flat|depft_neg|iyms21_med|evmom_stable|depmon_stable|div_no|ms2_high|au25_med": {
+      "2/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T20:59:28.591Z"
+      }
+    },
+    "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_low|evmom_stable|depmon_stable|div_no|ms2_high|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T21:09:28.163Z"
+      }
+    },
+    "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_low|evmom_stable|depmon_falling|div_no|ms2_high|au25_low": {
+      "1/1": {
+        "count": 1,
+        "firstSeen": "2026-04-21T21:34:28.209Z"
+      }
     }
   },
-  "signalAccuracy": {},
-  "pendingSignals": {},
+  "signalAccuracy": {
+    "1/1": {
+      "fired": 16,
+      "correct": 4
+    },
+    "X/X": {
+      "fired": 10,
+      "correct": 1
+    },
+    "X/2": {
+      "fired": 13,
+      "correct": 1
+    },
+    "2/1": {
+      "fired": 8,
+      "correct": 0
+    },
+    "2/2": {
+      "fired": 10,
+      "correct": 0
+    }
+  },
+  "pendingSignals": {
+    "2766098": {
+      "predictedAt": "2026-04-21T14:34:08.306Z",
+      "stateKey": "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_low|au25_med",
+      "topSignal": "X/2",
+      "tier": "STANDART",
+      "lift": 3.89,
+      "effectiveLift": 3.89,
+      "prob": 0.5,
+      "signalLabel": "X/2_STANDART"
+    },
+    "2809367": {
+      "predictedAt": "2026-04-21T18:14:08.814Z",
+      "stateKey": "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_low",
+      "topSignal": "X/2",
+      "tier": "STANDART",
+      "lift": 2.59,
+      "effectiveLift": 2.59,
+      "prob": 0.333,
+      "signalLabel": "X/2_STANDART"
+    },
+    "2809400": {
+      "predictedAt": "2026-04-21T18:14:08.814Z",
+      "stateKey": "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_low",
+      "topSignal": "X/2",
+      "tier": "STANDART",
+      "lift": 2.59,
+      "effectiveLift": 2.59,
+      "prob": 0.333,
+      "signalLabel": "X/2_STANDART"
+    },
+    "2830557": {
+      "predictedAt": "2026-04-21T12:33:45.747Z",
+      "stateKey": "ms1_high|iy2_low|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_low|au25_med",
+      "topSignal": "X/2",
+      "tier": "STANDART",
+      "lift": 3.89,
+      "effectiveLift": 3.89,
+      "prob": 0.5,
+      "signalLabel": "X/2_STANDART"
+    },
+    "2837096": {
+      "predictedAt": "2026-04-21T14:39:07.672Z",
+      "stateKey": "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med",
+      "topSignal": "1/1",
+      "tier": "STANDART",
+      "lift": 2.12,
+      "effectiveLift": 2.12,
+      "prob": 0.273,
+      "signalLabel": "1/1_STANDART"
+    },
+    "2837101": {
+      "predictedAt": "2026-04-21T16:49:08.848Z",
+      "stateKey": "ms1_low|iy2_med|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med",
+      "topSignal": "1/1",
+      "tier": "STANDART",
+      "lift": 2.12,
+      "effectiveLift": 2.12,
+      "prob": 0.273,
+      "signalLabel": "1/1_STANDART"
+    },
+    "2842655": {
+      "predictedAt": "2026-04-21T18:14:08.814Z",
+      "stateKey": "ms1_vlow|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_low",
+      "topSignal": "X/2",
+      "tier": "STANDART",
+      "lift": 2.59,
+      "effectiveLift": 2.59,
+      "prob": 0.333,
+      "signalLabel": "X/2_STANDART"
+    },
+    "2886189": {
+      "predictedAt": "2026-04-21T00:33:08.772Z",
+      "stateKey": "ms1_low|iy2_high|evft_flat|depft_flat|iyms21_na|evmom_stable|depmon_stable|div_no|ms2_high|au25_med",
+      "topSignal": "1/1",
+      "tier": "STANDART",
+      "lift": 4.67,
+      "effectiveLift": 4.67,
+      "prob": 0.6,
+      "signalLabel": "1/1_STANDART"
+    }
+  },
+  "marketStats": {
+    "ms1": {
+      "values": [
+        2.07,
+        2.85,
+        3.71,
+        2.98,
+        1.32,
+        1.31,
+        1.75,
+        4.29,
+        1.21,
+        3.8,
+        1,
+        1.42,
+        1.58,
+        1.15,
+        1.97
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    },
+    "ms2": {
+      "values": [
+        2.69,
+        1.86,
+        1.49,
+        1.9,
+        4.64,
+        5.33,
+        3.11,
+        1.5,
+        6.44,
+        1.56,
+        11.8,
+        4.41,
+        3.27,
+        8.07,
+        2.71
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    },
+    "iy1": {
+      "values": [
+        2.76,
+        3.47,
+        4.05,
+        3.63,
+        1.72,
+        1.8,
+        2.32,
+        4.82,
+        1.66,
+        4.37,
+        1.23,
+        1.92,
+        2.02,
+        1.57,
+        2.57
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    },
+    "iy2": {
+      "values": [
+        3.45,
+        2.45,
+        1.94,
+        2.5,
+        4.73,
+        5.71,
+        3.72,
+        2.02,
+        6.56,
+        2.09,
+        8.64,
+        4.86,
+        3.63,
+        7.97,
+        3.35
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    },
+    "sy1": {
+      "values": [
+        2.45,
+        3.05,
+        3.61,
+        3.17,
+        1.62,
+        1.67,
+        2.11,
+        4.16,
+        1.56,
+        3.8,
+        1.17,
+        1.78,
+        1.88,
+        1.47,
+        2.32
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    },
+    "au25o": {
+      "values": [
+        2.09,
+        1.74,
+        1.42,
+        1.92,
+        1.33,
+        1.74,
+        1.74,
+        1.86,
+        1.66,
+        1.76,
+        1.68,
+        1.34,
+        1.72,
+        1.8
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    },
+    "bttsY": {
+      "values": [
+        1.77,
+        1.57,
+        1.42,
+        1.67,
+        1.43,
+        1.85,
+        1.59,
+        1.78,
+        1.92,
+        1.67,
+        1.46,
+        1.68,
+        1.33,
+        2.16,
+        1.6
+      ],
+      "q10": null,
+      "q25": null,
+      "q50": null,
+      "q75": null,
+      "q90": null
+    }
+  },
   "version": 3,
-  "totalLearned": 81
+  "totalLearned": 221
 }
