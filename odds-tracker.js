@@ -169,7 +169,7 @@ function pushToGit() {
     if (!staged) { console.log('[Git] ⏩ Değişiklik yok.'); return; }
     const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
     execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
-    execSync('git pull --rebase origin main', { stdio: 'pipe' });
+    execSync('git pull --rebase --autostash origin main', { stdio: 'pipe' });
     execSync('git push origin main',           { stdio: 'pipe' });
     console.log('[Git] ✅ Push başarılı.');
   } catch (e) {
