@@ -1,20 +1,22 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v3.1
+ * ai_tracker.js — ScorePop Adaptive Tracker v3.2
  * ═══════════════════════════════════════════════════════════════════
- * v3.1 değişiklikleri (v3.0 üzerine):
+ * v3.2 değişiklikleri (v3.1 üzerine):
  *
- *  [FIX-7] ht_ft marketi olmayan maçlarda yanlış sinyal:
- *    • bucket() null → 'none' döndürür (önce son label'dı → yanlış state key).
- *    • extractFeatures() hasHtFt flag döndürür.
- *    • generateStateKey() ht_ft yoksa iyms boyutları 'na' marker alır.
- *    • evaluateSmartSignals() hasHtFt=false → lift ×0.70, tier düşer, ⚠ uyarı.
- *    • Öğrenme (learnFromMatch) ht_ft olmayan maçlarda da devam eder.
+ *  [FIX-9] Öğrenme uyumsuzluğu (Bug #2):
+ *    • learnFromMatch() artık önce pendingSignals[fid].stateKey'i kullanıyor.
+ *    • Sinyal anındaki key ile öğrenme key'i garantili eşleşiyor.
+ *    • Fallback: pending yoksa son snapshot._stateKey (önceki davranış).
  *
- *  [FIX-8] HT X (beraberlik ilk yarı) tam kapsamı:
- *    • FOCUS_RESULTS'a '1/X' ve '2/X' eklendi (önceden öğrenilmiyordu).
- *    • baseProb 0.11 → 0.09 (9 sonuç için uniform prior).
+ *  [FIX-10] X/X birikimi / yeni outcome sıfır başlangıç sorunu (Bug #3):
+ *    • predict() içinde Laplace smoothing eklendi: (cnt+1)/(total+N).
+ *    • N = FOCUS_RESULTS.length = 9 → her outcome için +1 prior.
+ *    • Eski memory silinmeden X/X avantajı hemen kırılır.
+ *    • baseProb 1/N (≈0.111) ile tutarlı; predictWithSimilarity güncellendi.
+ *    • Mevcut counts'a dokunulmadı — eski veriler korunuyor.
  *
- *  v3.0'dan korunanlar: NEW-1..6, FIX-3..6 aynı çalışır.
+ *  v3.1'den korunanlar: FIX-7 (ht_ft yoksa ×0.70), FIX-8 (1/X + 2/X)
+ *  ve tüm v3.0 özellikleri aynı çalışır.
  */
 'use strict';
 
@@ -187,7 +189,7 @@ function fetchJSON(url) {
         'Accept-Encoding': 'identity',
         'Referer':         'https://www.nesine.com/',
         'Origin':          'https://www.nesine.com',
-        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.1)',
+        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.2)',
       }
     }, res => {
       let buf = '';
@@ -399,16 +401,31 @@ function generateStateKey(features) {
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 7 — ÖĞRENME MOTORU
 // ════════════════════════════════════════════════════════════════════
+
+// [FIX-9] Sinyal anındaki stateKey ile öğrenme key'ini eşleştir.
+// Önce pendingSignals[fid].stateKey'e bak — signal ateşlendiğinde
+// markFired() orada saklıyor. Eğer pending yoksa (bootstrap vs.) son
+// snapshot._stateKey'e düş (önceki v3.1 davranışı, aynı maç).
 function learnFromMatch(fixtureId, actualHtFt) {
   const match = matchCache.get(fixtureId);
   if (!match || !match.snapshots || match.snapshots.length === 0) return;
   if (!FOCUS_RESULTS.includes(actualHtFt)) return;
-  const lastSnap = match.snapshots[match.snapshots.length - 1];
-  if (!lastSnap._stateKey) {
-    console.warn(`[Learn] fixture=${fixtureId} _stateKey yok, öğrenme atlandı`);
-    return;
+
+  // [FIX-9] Sinyal anındaki key öncelikli
+  const pending = memory.pendingSignals[fixtureId];
+  let key;
+  if (pending?.stateKey) {
+    key = pending.stateKey;
+    console.log(`[Learn] fixture=${fixtureId} → pending stateKey kullanıldı`);
+  } else {
+    const lastSnap = match.snapshots[match.snapshots.length - 1];
+    if (!lastSnap._stateKey) {
+      console.warn(`[Learn] fixture=${fixtureId} _stateKey yok, öğrenme atlandı`);
+      return;
+    }
+    key = lastSnap._stateKey;
   }
-  const key = lastSnap._stateKey;
+
   if (!memory.patterns[key]) memory.patterns[key] = {};
   if (!memory.patterns[key][actualHtFt])
     memory.patterns[key][actualHtFt] = { count: 0, firstSeen: new Date().toISOString() };
@@ -417,32 +434,49 @@ function learnFromMatch(fixtureId, actualHtFt) {
   console.log(`[Learn] "${key}" → ${actualHtFt} (sayı: ${memory.patterns[key][actualHtFt].count})`);
 }
 
+// [FIX-10] Laplace smoothing: (count+1) / (total + N)
+// N = FOCUS_RESULTS.length = 9
+// Her outcome için +1 prior → eski memory'de 0'lı yeni outcome'lar
+// (1/X, 2/X) artık X/X'in birikmiş count'una karşı şansını korur.
+// baseProb 1/N ile tutarlı; eski veriler silinmez.
 function predict(stateKey) {
+  const N       = FOCUS_RESULTS.length;          // 9
+  const basePrb = 1 / N;                          // ≈ 0.111
   const pattern = memory.patterns[stateKey];
   const result  = {};
-  for (const r of FOCUS_RESULTS) result[r] = { prob: 0.04, lift: 1.0, count: 0, confidence: 'none' };
+
+  // Varsayılan: veri yokken uniform prior
+  for (const r of FOCUS_RESULTS)
+    result[r] = { prob: +basePrb.toFixed(3), lift: 1.0, count: 0, confidence: 'none' };
+
   if (!pattern) return result;
+
+  // Ham gözlem toplamı (Laplace öncesi)
   let total = 0;
   for (const r of FOCUS_RESULTS) total += (pattern[r]?.count || 0);
   if (total < 2) return result;
-  const baseProb = 0.09; // [FIX-8] 9 sonuç için uniform prior
+
   for (const r of FOCUS_RESULTS) {
     const cnt  = pattern[r]?.count || 0;
-    const prob = cnt / total;
-    const lift = prob / baseProb;
+    // [FIX-10] Laplace smoothing
+    const prob = (cnt + 1) / (total + N);
+    const lift = prob / basePrb;
     let confidence = 'low';
     if (total >= 10 && prob >= 0.30) confidence = 'high';
-    else if (total >= 5 && prob >= 0.20) confidence = 'medium';
+    else if (total >= 5  && prob >= 0.20) confidence = 'medium';
     result[r] = { prob: +prob.toFixed(3), lift: +lift.toFixed(2), count: cnt, total, confidence };
   }
   return result;
 }
 
 function predictWithSimilarity(stateKey) {
-  const direct      = predict(stateKey);
+  const N         = FOCUS_RESULTS.length; // 9
+  const basePrb   = 1 / N;               // [FIX-10] predict() ile tutarlı
+  const direct    = predict(stateKey);
   const directTotal = direct['2/1'].total || 0;
   if (directTotal >= 5) return direct;
-  const neighbors   = [];
+
+  const neighbors  = [];
   const targetParts = stateKey.split('|');
   for (const k of Object.keys(memory.patterns)) {
     const parts = k.split('|');
@@ -454,9 +488,12 @@ function predictWithSimilarity(stateKey) {
     }
   }
   if (neighbors.length === 0) return direct;
-  const blended = {};
-  let weightSum = directTotal;
-  for (const r of FOCUS_RESULTS) blended[r] = { prob: direct[r].prob * directTotal, count: direct[r].count };
+
+  const blended  = {};
+  let weightSum  = directTotal;
+  for (const r of FOCUS_RESULTS)
+    blended[r] = { prob: direct[r].prob * directTotal, count: direct[r].count };
+
   for (const n of neighbors) {
     const nPred = predict(n.key);
     const w     = n.total * 0.5;
@@ -466,12 +503,12 @@ function predictWithSimilarity(stateKey) {
       blended[r].count += nPred[r].count;
     }
   }
-  const final    = {};
-  const baseProb = 0.09; // [FIX-8]
+
+  const final = {};
   for (const r of FOCUS_RESULTS) {
     const prob = weightSum > 0 ? blended[r].prob / weightSum : 0;
     final[r] = {
-      prob: +prob.toFixed(3), lift: +(prob/baseProb).toFixed(2),
+      prob: +prob.toFixed(3), lift: +(prob / basePrb).toFixed(2),  // [FIX-10]
       count: blended[r].count, total: Math.round(weightSum),
       confidence: (weightSum >= 8 && prob >= 0.25) ? 'medium' : 'low',
     };
@@ -902,7 +939,7 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v3.1 — Self-Evaluating Market Engine  ║');
+  console.log('║  ScorePop Adaptive v3.2 — Self-Evaluating Market Engine  ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
   console.log(`║  Bootstrap eşiği   : ${String(BOOTSTRAP_THRESHOLD).padEnd(36)}║`);
   console.log(`║  Sinyal penceresi  : ≤${String(Math.round(SIGNAL_WINDOW_H*60)+'dk').padEnd(35)}║`);
@@ -910,6 +947,8 @@ async function main() {
   console.log(`║  Penalty / Boost   : <%${String((ACCURACY_PENALTY_THR*100).toFixed(0)).padEnd(9)} / >%${String((ACCURACY_BOOST_THR*100).toFixed(0)).padEnd(22)}║`);
   console.log(`║  v3.1 FIX-7: ht_ft eksik → lift×0.70 + tier düşer      ║`);
   console.log(`║  v3.1 FIX-8: FOCUS_RESULTS 1/X ve 2/X eklendi (9 sonuç)║`);
+  console.log(`║  v3.2 FIX-9: learnFromMatch → pending stateKey öncelikli ║`);
+  console.log(`║  v3.2 FIX-10: Laplace smoothing (cnt+1)/(total+9)        ║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
@@ -927,7 +966,7 @@ async function main() {
     if (wait > 0 && remaining > wait) await new Promise(r => setTimeout(r, wait));
   }
 
-  logAccuracyReport();
+  logAccuracyReport();  
   saveCache();
 
   console.log('\n╔══════════════════════════════════════════════════════════╗');
