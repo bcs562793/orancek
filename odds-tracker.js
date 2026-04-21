@@ -1,22 +1,26 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v3.2
+ * ai_tracker.js — ScorePop Adaptive Tracker v3.3
  * ═══════════════════════════════════════════════════════════════════
- * v3.2 değişiklikleri (v3.1 üzerine):
+ * v3.3 değişiklikleri (v3.2 üzerine):
  *
- *  [FIX-9] Öğrenme uyumsuzluğu (Bug #2):
- *    • learnFromMatch() artık önce pendingSignals[fid].stateKey'i kullanıyor.
- *    • Sinyal anındaki key ile öğrenme key'i garantili eşleşiyor.
- *    • Fallback: pending yoksa son snapshot._stateKey (önceki davranış).
+ *  [FIX-11] recordMarketValue syntax hatası:
+ *    • extractFeatures() içinde const f={} DIŞINA taşındı.
+ *    • Obje literal içinde statement yazılamaz — kod çalışmıyordu.
  *
- *  [FIX-10] X/X birikimi / yeni outcome sıfır başlangıç sorunu (Bug #3):
- *    • predict() içinde Laplace smoothing eklendi: (cnt+1)/(total+N).
- *    • N = FOCUS_RESULTS.length = 9 → her outcome için +1 prior.
- *    • Eski memory silinmeden X/X avantajı hemen kırılır.
- *    • baseProb 1/N (≈0.111) ile tutarlı; predictWithSimilarity güncellendi.
- *    • Mevcut counts'a dokunulmadı — eski veriler korunuyor.
+ *  [FIX-12] calcFromOpen tam versiyon:
+ *    • Sadece 7 pair yerine tüm marketler eklendi.
+ *    • ou25, ou15, ou35, btts, ht_1x2 away/draw, 2h_1x2, X/X, X/1 vb.
  *
- *  v3.1'den korunanlar: FIX-7 (ht_ft yoksa ×0.70), FIX-8 (1/X + 2/X)
- *  ve tüm v3.0 özellikleri aynı çalışır.
+ *  [FIX-13] calcFromOpen yerleşimi:
+ *    • Fonksiyon kullanıldığı yerden önce tanımlandı (hoisting bağımlılığı kaldırıldı).
+ *
+ *  [FIX-14] extractFeatures f objesi genişletildi:
+ *    • ou25o_drop, bttsy_drop, iy2_drop, ou15o_drop vb. eklendi.
+ *
+ *  [FIX-15] parseMarkets yeni marketler:
+ *    • ou45, ht_ou15, ht_ou05, dc_2h eklendi (MTID doğrulama gerekebilir).
+ *
+ *  v3.2'den korunanlar: FIX-9, FIX-10, FIX-7, FIX-8 ve tüm v3.0 özellikleri.
  */
 'use strict';
 
@@ -51,17 +55,17 @@ let memory       = {
   patterns:       {},
   signalAccuracy: {},
   pendingSignals: {},
+  marketStats:    {},
   version:        3,
   totalLearned:   0,
 };
 let cycleCount = 0;
 const startTime = Date.now();
 
-// [FIX-8] 1/X ve 2/X eklendi (HT ev/dep kazanır ama FT beraberlik)
 const FOCUS_RESULTS = ['1/1', '2/1', '1/X', '2/X', 'X/X', 'X/2', 'X/1', '2/2', '1/2'];
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 0 — DOĞRULUK MOTORU (v3.0'dan korundu)
+// BÖLÜM 0 — DOĞRULUK MOTORU
 // ════════════════════════════════════════════════════════════════════
 function resolvePendingSignal(fid, actualResult) {
   const pending = memory.pendingSignals[fid];
@@ -137,6 +141,7 @@ function loadCache() {
         patterns:       loaded.patterns       || {},
         signalAccuracy: loaded.signalAccuracy || {},
         pendingSignals: loaded.pendingSignals || {},
+        marketStats:    loaded.marketStats    || {},
         version:        3,
         totalLearned:   loaded.totalLearned   || 0,
       };
@@ -169,8 +174,9 @@ function pushToGit() {
     if (!staged) { console.log('[Git] ⏩ Değişiklik yok.'); return; }
     const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
     execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
+    // [FIX-GIT] --autostash: unstaged değişiklikler varsa stash yap, pull sonrası geri al
     execSync('git pull --rebase --autostash origin main', { stdio: 'pipe' });
-    execSync('git push origin main',           { stdio: 'pipe' });
+    execSync('git push origin main',                       { stdio: 'pipe' });
     console.log('[Git] ✅ Push başarılı.');
   } catch (e) {
     if (e.stderr) console.warn('[Git] STDERR:', e.stderr.toString().trim());
@@ -189,7 +195,7 @@ function fetchJSON(url) {
         'Accept-Encoding': 'identity',
         'Referer':         'https://www.nesine.com/',
         'Origin':          'https://www.nesine.com',
-        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.2)',
+        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.3)',
       }
     }, res => {
       let buf = '';
@@ -205,7 +211,7 @@ function fetchJSON(url) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 3 — TAKIM EŞLEŞTİRME (v3.0'dan korundu)
+// BÖLÜM 3 — TAKIM EŞLEŞTİRME
 // ════════════════════════════════════════════════════════════════════
 const TEAM_ALIASES = {
   'not forest':'nottingham forest','cry. palace':'crystal palace',
@@ -261,7 +267,10 @@ function findBestMatch(home,away,events) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 4 — MARKET PARSE (v3.0'dan korundu)
+// BÖLÜM 4 — MARKET PARSE
+// [FIX-15] Yeni marketler eklendi: ou45, ht_ou15, ht_ou05, dc_2h
+// ⚠️  MTID numaraları Nesine API'ye göre değişebilir.
+//     console.log('[Markets] IDs:', maArr.map(x=>x.MTID)) ile doğrula.
 // ════════════════════════════════════════════════════════════════════
 function parseMarkets(maArr) {
   const m={};
@@ -269,30 +278,35 @@ function parseMarkets(maArr) {
   for(const x of maArr){
     const id=x.MTID, oca=x.OCA||[];
     const g=n=>{const o=oca.find(x=>x.N===n);return o?+o.O:0;};
-    if(id===1 &&oca.length===3) m['1x2']            ={home:g(1),draw:g(2),away:g(3)};
-    if(id===7 &&oca.length===3) m['ht_1x2']         ={home:g(1),draw:g(2),away:g(3)};
-    if(id===9 &&oca.length===3) m['2h_1x2']         ={home:g(1),draw:g(2),away:g(3)};
-    if(id===5 &&oca.length===9) m['ht_ft']          ={
+    if(id===1  &&oca.length===3) m['1x2']            ={home:g(1),draw:g(2),away:g(3)};
+    if(id===7  &&oca.length===3) m['ht_1x2']         ={home:g(1),draw:g(2),away:g(3)};
+    if(id===9  &&oca.length===3) m['2h_1x2']         ={home:g(1),draw:g(2),away:g(3)};
+    if(id===5  &&oca.length===9) m['ht_ft']          ={
       '1/1':g(1),'1/X':g(2),'1/2':g(3),
       'X/1':g(4),'X/X':g(5),'X/2':g(6),
       '2/1':g(7),'2/X':g(8),'2/2':g(9),
     };
-    if(id===12&&oca.length===2) m['ou25']           ={under:g(1),over:g(2)};
-    if(id===11&&oca.length===2) m['ou15']           ={under:g(1),over:g(2)};
-    if(id===13&&oca.length===2) m['ou35']           ={under:g(1),over:g(2)};
-    if(id===38&&oca.length===2) m['btts']           ={yes:g(1),no:g(2)};
-    if(id===48&&oca.length===3) m['more_goals_half']={first:g(1),equal:g(2),second:g(3)};
-    if(id===3 &&oca.length===3) m['dc']             ={'1x':g(1),'12':g(2),'x2':g(3)};
+    if(id===12 &&oca.length===2) m['ou25']           ={under:g(1),over:g(2)};
+    if(id===11 &&oca.length===2) m['ou15']           ={under:g(1),over:g(2)};
+    if(id===13 &&oca.length===2) m['ou35']           ={under:g(1),over:g(2)};
+    if(id===38 &&oca.length===2) m['btts']           ={yes:g(1),no:g(2)};
+    if(id===48 &&oca.length===3) m['more_goals_half']={first:g(1),equal:g(2),second:g(3)};
+    if(id===3  &&oca.length===3) m['dc']             ={'1x':g(1),'12':g(2),'x2':g(3)};
+    // [FIX-15] Yeni marketler — MTID değerlerini Nesine API'den doğrula:
+    if(id===2  &&oca.length===2) m['ou45']           ={under:g(1),over:g(2)};
+    if(id===14 &&oca.length===2) m['ht_ou15']        ={under:g(1),over:g(2)};
+    if(id===30 &&oca.length===2) m['ht_ou05']        ={under:g(1),over:g(2)};
+    if(id===10 &&oca.length===3) m['dc_2h']          ={'1x':g(1),'12':g(2),'x2':g(3)};
   }
   return m;
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 5 — DELTA HESABI (v3.0'dan korundu)
+// BÖLÜM 5 — DELTA HESABI
 // ════════════════════════════════════════════════════════════════════
 function calcDelta(prev,curr) {
   const ch={};
-  const keys=['1x2','ht_1x2','2h_1x2','ht_ft','ou25','ou15','ou35','btts','more_goals_half'];
+  const keys=['1x2','ht_1x2','2h_1x2','ht_ft','ou25','ou15','ou35','ou45','btts','more_goals_half','ht_ou15','ht_ou05','dc','dc_2h'];
   for(const k of keys){
     ch[k]={};
     const p=prev[k]||{},c=curr[k]||{};
@@ -312,14 +326,163 @@ function ftGroups(changes) {
 // BÖLÜM 6 — ÖZELLİK ÇIKARIMI & DURUM KODU
 // ════════════════════════════════════════════════════════════════════
 
-// [FIX-7] null → 'none' (önce son label'dı → yanlış state key üretiyordu)
 function bucket(val, thresholds, labels) {
   if (val === null || val === undefined) return 'none';
   for (let i = 0; i < thresholds.length; i++) if (val <= thresholds[i]) return labels[i];
   return labels[labels.length - 1];
 }
 
-function extractFeatures(markets, changes, cumCache, snapshots) {
+// ────────────────────────────────────────────────────────────────────
+// Dinamik Quantile Sistemi
+// ────────────────────────────────────────────────────────────────────
+
+function recordMarketValue(marketKey, value) {
+  if (value == null) return;
+  if (!memory.marketStats[marketKey])
+    memory.marketStats[marketKey] = { values: [], q10: null, q25: null, q50: null, q75: null, q90: null };
+  const stat = memory.marketStats[marketKey];
+  stat.values.push(value);
+  if (stat.values.length % 50 === 0) {
+    const sorted = [...stat.values].sort((a, b) => a - b);
+    const n = sorted.length;
+    stat.q10 = sorted[Math.floor(n * 0.10)];
+    stat.q25 = sorted[Math.floor(n * 0.25)];
+    stat.q50 = sorted[Math.floor(n * 0.50)];
+    stat.q75 = sorted[Math.floor(n * 0.75)];
+    stat.q90 = sorted[Math.floor(n * 0.90)];
+    console.log(
+      `[Stats] ${marketKey} (${n} gözlem):` +
+      ` q10=${stat.q10} q25=${stat.q25} q50=${stat.q50}` +
+      ` q75=${stat.q75} q90=${stat.q90}`
+    );
+  }
+}
+
+function dynamicBucket(value, marketKey, fallbackThresholds, fallbackLabels) {
+  if (value == null) return 'none';
+  const stat = memory.marketStats?.[marketKey];
+  // 100 gözlem dolana kadar insan tanımlı sabit threshold kullan
+  if (!stat?.q25 || stat.values.length < 100)
+    return bucket(value, fallbackThresholds, fallbackLabels);
+  // Yeterli veri varsa veriden öğrenilmiş quantile sınırlarını kullan
+  if (value <= stat.q10) return 'vlow';
+  if (value <= stat.q25) return 'low';
+  if (value <= stat.q75) return 'med';
+  if (value <= stat.q90) return 'high';
+  return 'vhigh';
+}
+
+function analyzeFeatureImportance() {
+  const importance = {};
+  for (const [stateKey, outcomes] of Object.entries(memory.patterns)) {
+    const parts  = stateKey.split('|');
+    const total  = Object.values(outcomes).reduce((s, v) => s + (v.count || 0), 0);
+    if (total < 3) continue;
+    const maxCnt = Math.max(...Object.values(outcomes).map(v => v.count || 0));
+    const lift   = total > 0 ? (maxCnt / total) / (1 / FOCUS_RESULTS.length) : 1;
+    for (const part of parts) {
+      if (!importance[part]) importance[part] = { totalLift: 0, count: 0 };
+      importance[part].totalLift += lift;
+      importance[part].count++;
+    }
+  }
+  const ranked = Object.entries(importance)
+    .map(([k, v]) => ({ feature: k, avgLift: +(v.totalLift / v.count).toFixed(2) }))
+    .sort((a, b) => b.avgLift - a.avgLift)
+    .slice(0, 20);
+  console.log('\n' + '─'.repeat(55));
+  console.log('  🔬 FEATURE IMPORTANCE (öğrenilmiş)');
+  console.log('─'.repeat(55));
+  for (const r of ranked)
+    console.log(`  ${r.feature.padEnd(35)} lift: ${r.avgLift}x`);
+  console.log('─'.repeat(55) + '\n');
+  return ranked;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// [FIX-12] calcFromOpen — TAM VERSİYON
+// Tüm marketlerin açılıştan % değişimini hesaplar.
+// Negatif değer = oran düştü = o sonuca para girdi.
+// [FIX-13] extractFeatures'dan ÖNCE tanımlandı (hoisting bağımlılığı yok).
+// ────────────────────────────────────────────────────────────────────
+function calcFromOpen(openingMarkets, currMarkets) {
+  const result = {};
+  const o = openingMarkets || {};
+  const c = currMarkets    || {};
+
+  // Yardımcı: % değişim, null-safe
+  const pct = (open, curr) =>
+    (open && curr && open !== 0) ? +((curr - open) / open).toFixed(3) : null;
+
+  // ── 1X2 ──────────────────────────────────────────────────────────
+  result.ms1_drop  = pct(o['1x2']?.home, c['1x2']?.home);
+  result.ms2_drop  = pct(o['1x2']?.away, c['1x2']?.away);
+  result.msx_drop  = pct(o['1x2']?.draw, c['1x2']?.draw);
+
+  // ── HT 1X2 (İY) ──────────────────────────────────────────────────
+  result.iy1_drop  = pct(o['ht_1x2']?.home, c['ht_1x2']?.home);
+  result.iy2_drop  = pct(o['ht_1x2']?.away, c['ht_1x2']?.away);
+  result.iyx_drop  = pct(o['ht_1x2']?.draw, c['ht_1x2']?.draw);
+
+  // ── 2H 1X2 (2Y) ──────────────────────────────────────────────────
+  result.sy1_drop  = pct(o['2h_1x2']?.home, c['2h_1x2']?.home);
+  result.sy2_drop  = pct(o['2h_1x2']?.away, c['2h_1x2']?.away);
+  result.syx_drop  = pct(o['2h_1x2']?.draw, c['2h_1x2']?.draw);
+
+  // ── IY/MS (HT/FT) 9 sonuç ────────────────────────────────────────
+  result.iyms11_drop = pct(o['ht_ft']?.['1/1'], c['ht_ft']?.['1/1']);
+  result.iyms22_drop = pct(o['ht_ft']?.['2/2'], c['ht_ft']?.['2/2']);
+  result.iyms21_drop = pct(o['ht_ft']?.['2/1'], c['ht_ft']?.['2/1']);
+  result.iyms12_drop = pct(o['ht_ft']?.['1/2'], c['ht_ft']?.['1/2']);
+  result.iymsxx_drop = pct(o['ht_ft']?.['X/X'], c['ht_ft']?.['X/X']);
+  result.iymsx1_drop = pct(o['ht_ft']?.['X/1'], c['ht_ft']?.['X/1']);
+  result.iymsx2_drop = pct(o['ht_ft']?.['X/2'], c['ht_ft']?.['X/2']);
+  result.iyms1x_drop = pct(o['ht_ft']?.['1/X'], c['ht_ft']?.['1/X']);
+  result.iyms2x_drop = pct(o['ht_ft']?.['2/X'], c['ht_ft']?.['2/X']);
+
+  // ── Alt/Üst FT ───────────────────────────────────────────────────
+  result.ou15o_drop  = pct(o['ou15']?.over,  c['ou15']?.over);
+  result.ou15u_drop  = pct(o['ou15']?.under, c['ou15']?.under);
+  result.ou25o_drop  = pct(o['ou25']?.over,  c['ou25']?.over);
+  result.ou25u_drop  = pct(o['ou25']?.under, c['ou25']?.under);
+  result.ou35o_drop  = pct(o['ou35']?.over,  c['ou35']?.over);
+  result.ou35u_drop  = pct(o['ou35']?.under, c['ou35']?.under);
+  result.ou45o_drop  = pct(o['ou45']?.over,  c['ou45']?.over);
+  result.ou45u_drop  = pct(o['ou45']?.under, c['ou45']?.under);
+
+  // ── Alt/Üst IY ───────────────────────────────────────────────────
+  result.htou15o_drop = pct(o['ht_ou15']?.over,  c['ht_ou15']?.over);
+  result.htou15u_drop = pct(o['ht_ou15']?.under, c['ht_ou15']?.under);
+  result.htou05o_drop = pct(o['ht_ou05']?.over,  c['ht_ou05']?.over);
+  result.htou05u_drop = pct(o['ht_ou05']?.under, c['ht_ou05']?.under);
+
+  // ── KGV (BTTS) ───────────────────────────────────────────────────
+  result.bttsy_drop  = pct(o['btts']?.yes, c['btts']?.yes);
+  result.bttsn_drop  = pct(o['btts']?.no,  c['btts']?.no);
+
+  // ── Çifte Şans FT ────────────────────────────────────────────────
+  result.dc1x_drop   = pct(o['dc']?.['1x'], c['dc']?.['1x']);
+  result.dc12_drop   = pct(o['dc']?.['12'], c['dc']?.['12']);
+  result.dcx2_drop   = pct(o['dc']?.['x2'], c['dc']?.['x2']);
+
+  // ── Çifte Şans 2Y ────────────────────────────────────────────────
+  result.dc2h1x_drop = pct(o['dc_2h']?.['1x'], c['dc_2h']?.['1x']);
+  result.dc2h12_drop = pct(o['dc_2h']?.['12'], c['dc_2h']?.['12']);
+  result.dc2hx2_drop = pct(o['dc_2h']?.['x2'], c['dc_2h']?.['x2']);
+
+  // ── Yarı Daha Gollü ──────────────────────────────────────────────
+  result.mgh1_drop   = pct(o['more_goals_half']?.first,  c['more_goals_half']?.first);
+  result.mgh2_drop   = pct(o['more_goals_half']?.second, c['more_goals_half']?.second);
+
+  return result;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// extractFeatures
+// [FIX-11] recordMarketValue çağrıları const f={} DIŞINDA ve ÖNCE
+// [FIX-14] f objesine tüm drop bucket'ları eklendi
+// ────────────────────────────────────────────────────────────────────
+function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) {
   const mk = (k,s) => markets?.[k]?.[s] ?? null;
   const { ev_ft, dep_ft } = ftGroups(changes || {});
 
@@ -336,23 +499,91 @@ function extractFeatures(markets, changes, cumCache, snapshots) {
   const bttsY  = mk('btts','yes');
   const dcg2h  = mk('more_goals_half','second');
 
-  // [FIX-7] ht_ft varlığını kontrol et
   const hasHtFt = !!(markets?.ht_ft);
 
+  // [FIX-11] Gözlemleri kaydet — const f={} DIŞINDA ve ÖNCE
+  recordMarketValue('ms1',    ms1);
+  recordMarketValue('ms2',    ms2);
+  recordMarketValue('iy1',    iy1);
+  recordMarketValue('iy2',    iy2);
+  recordMarketValue('sy1',    sy1);
+  recordMarketValue('iyms21', iyms21);
+  recordMarketValue('iyms22', iyms22);
+  recordMarketValue('iyms11', iyms11);
+  recordMarketValue('iyms12', iyms12);
+  recordMarketValue('au25o',  au25o);
+  recordMarketValue('bttsY',  bttsY);
+
+  // Açılıştan değişimler
+  const drops = calcFromOpen(openingMarkets, markets);
+
+  // Threshold grupları
+  const mainThr = [-0.20, -0.10, -0.05];
+  const mainLbl = ['heavy','mod','light','flat'];
+  const htftThr = [-0.50, -0.30, -0.10];
+  const htftLbl = ['heavy','mod','light','flat'];
+  const ouThr   = [-0.25, -0.12, -0.05];
+  const ouLbl   = ['heavy','mod','light','flat'];
+
+  // [FIX-11] Obje literal — sadece property tanımları, statement YOK
   const f = {
-    ms1_bucket:    bucket(ms1,    [1.30,1.60,2.50], ['vlow','low','med','high']),
-    ms2_bucket:    bucket(ms2,    [1.80,3.00],       ['low','med','high']),
-    iy1_bucket:    bucket(iy1,    [1.70,2.50],       ['low','med','high']),
-    iy2_bucket:    bucket(iy2,    [3.50,5.00],       ['low','med','high']),
-    sy1_bucket:    bucket(sy1,    [1.70,2.50],       ['low','med','high']),
-    iyms21_bucket: bucket(iyms21, [10,22,35],        ['vlow','low','med','high']),
-    iyms22_bucket: bucket(iyms22, [3,8,15],          ['vlow','low','med','high']),
-    iyms11_bucket: bucket(iyms11, [3,6,12],          ['vlow','low','med','high']),
-    iyms12_bucket: bucket(iyms12, [10,20,35],        ['vlow','low','med','high']),
-    au25o_bucket:  bucket(au25o,  [1.50,2.00,2.80],  ['low','med','high','vhigh']),
-    btts_bucket:   bucket(bttsY,  [1.50,2.00],       ['low','med','high']),
+    // ── Anlık oran bucket'ları (dynamicBucket: 100 gözlem sonrası otomatik geçiş) ──
+    ms1_bucket:    dynamicBucket(ms1,    'ms1',    [1.30,1.60,2.50], ['vlow','low','med','high']),
+    ms2_bucket:    dynamicBucket(ms2,    'ms2',    [1.80,3.00],       ['low','med','high']),
+    iy1_bucket:    dynamicBucket(iy1,    'iy1',    [1.70,2.50],       ['low','med','high']),
+    iy2_bucket:    dynamicBucket(iy2,    'iy2',    [3.50,5.00],       ['low','med','high']),
+    sy1_bucket:    dynamicBucket(sy1,    'sy1',    [1.70,2.50],       ['low','med','high']),
+    iyms21_bucket: dynamicBucket(iyms21, 'iyms21', [10,22,35],        ['vlow','low','med','high']),
+    iyms22_bucket: dynamicBucket(iyms22, 'iyms22', [3,8,15],          ['vlow','low','med','high']),
+    iyms11_bucket: dynamicBucket(iyms11, 'iyms11', [3,6,12],          ['vlow','low','med','high']),
+    iyms12_bucket: dynamicBucket(iyms12, 'iyms12', [10,20,35],        ['vlow','low','med','high']),
+    au25o_bucket:  dynamicBucket(au25o,  'au25o',  [1.50,2.00,2.80],  ['low','med','high','vhigh']),
+    btts_bucket:   dynamicBucket(bttsY,  'bttsY',  [1.50,2.00],       ['low','med','high']),
+
+    // ── Delta sinyalleri ──────────────────────────────────────────
     ev_ft_sign:    ev_ft  < -1 ? 'neg' : ev_ft  > 1 ? 'pos' : 'flat',
     dep_ft_sign:   dep_ft < -1 ? 'neg' : dep_ft > 1 ? 'pos' : 'flat',
+
+    // [FIX-14] Açılıştan % değişim bucket'ları — TAM VERSİYON
+    // 1X2
+    ms1_drop:      bucket(drops.ms1_drop,     mainThr, mainLbl),
+    ms2_drop:      bucket(drops.ms2_drop,     mainThr, mainLbl),
+    msx_drop:      bucket(drops.msx_drop,     mainThr, mainLbl),
+    // IY 1X2
+    iy1_drop:      bucket(drops.iy1_drop,     mainThr, mainLbl),
+    iy2_drop:      bucket(drops.iy2_drop,     mainThr, mainLbl),
+    iyx_drop:      bucket(drops.iyx_drop,     mainThr, mainLbl),
+    // 2Y 1X2
+    sy1_drop:      bucket(drops.sy1_drop,     mainThr, mainLbl),
+    sy2_drop:      bucket(drops.sy2_drop,     mainThr, mainLbl),
+    // IY/MS 9 sonuç
+    iyms11_drop:   bucket(drops.iyms11_drop,  htftThr, htftLbl),
+    iyms22_drop:   bucket(drops.iyms22_drop,  htftThr, htftLbl),
+    iyms21_drop:   bucket(drops.iyms21_drop,  htftThr, htftLbl),
+    iyms12_drop:   bucket(drops.iyms12_drop,  htftThr, htftLbl),
+    iymsxx_drop:   bucket(drops.iymsxx_drop,  htftThr, htftLbl),
+    iymsx1_drop:   bucket(drops.iymsx1_drop,  htftThr, htftLbl),
+    iymsx2_drop:   bucket(drops.iymsx2_drop,  htftThr, htftLbl),
+    iyms1x_drop:   bucket(drops.iyms1x_drop,  htftThr, htftLbl),
+    iyms2x_drop:   bucket(drops.iyms2x_drop,  htftThr, htftLbl),
+    // Alt/Üst FT
+    ou15o_drop:    bucket(drops.ou15o_drop,   ouThr, ouLbl),
+    ou25o_drop:    bucket(drops.ou25o_drop,   ouThr, ouLbl),
+    ou25u_drop:    bucket(drops.ou25u_drop,   ouThr, ouLbl),
+    ou35o_drop:    bucket(drops.ou35o_drop,   ouThr, ouLbl),
+    ou45o_drop:    bucket(drops.ou45o_drop,   ouThr, ouLbl),
+    // Alt/Üst IY
+    htou15o_drop:  bucket(drops.htou15o_drop, ouThr, ouLbl),
+    htou05o_drop:  bucket(drops.htou05o_drop, ouThr, ouLbl),
+    // KGV
+    bttsy_drop:    bucket(drops.bttsy_drop,   ouThr, ouLbl),
+    bttsn_drop:    bucket(drops.bttsn_drop,   ouThr, ouLbl),
+    // Çifte Şans
+    dc1x_drop:     bucket(drops.dc1x_drop,    mainThr, mainLbl),
+    dc12_drop:     bucket(drops.dc12_drop,    mainThr, mainLbl),
+    dcx2_drop:     bucket(drops.dcx2_drop,    mainThr, mainLbl),
+    // Yarı Daha Gollü
+    mgh2_drop:     bucket(drops.mgh2_drop,    ouThr, ouLbl),
   };
 
   const recent = (snapshots||[]).slice(-3);
@@ -373,11 +604,10 @@ function extractFeatures(markets, changes, cumCache, snapshots) {
   return {
     raw: { ms1,ms2,iy1,iy2,sy1,iyms21,iyms22,iyms11,iyms12,au25o,bttsY,dcg2h,ev_ft,dep_ft },
     buckets: f,
-    hasHtFt,  // [FIX-7]
+    hasHtFt,
   };
 }
 
-// [FIX-7] ht_ft yoksa iyms boyutları 'na' marker alır
 function generateStateKey(features) {
   const b = features.buckets;
   const iyms21Key = (b.iyms21_bucket !== 'none') ? `iyms21_${b.iyms21_bucket}` : 'iyms21_na';
@@ -395,23 +625,22 @@ function generateStateKey(features) {
     `div_${b.div_ev_to_dep}`,
     `ms2_${b.ms2_bucket}`,
     au25Key,
+    // Açılıştan hareket boyutları (en bilgi yoğun 4):
+    `ms1d_${b.ms1_drop}`,        // ev favori mi giderek?
+    `ms2d_${b.ms2_drop}`,        // dep favori mi giderek?
+    `iyms22d_${b.iyms22_drop}`,  // IY/MS 2/2'ye para mı giriyor?
+    `ou25od_${b.ou25o_drop}`,    // gol beklentisi artıyor mu?
   ].join('|');
 }
 
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 7 — ÖĞRENME MOTORU
 // ════════════════════════════════════════════════════════════════════
-
-// [FIX-9] Sinyal anındaki stateKey ile öğrenme key'ini eşleştir.
-// Önce pendingSignals[fid].stateKey'e bak — signal ateşlendiğinde
-// markFired() orada saklıyor. Eğer pending yoksa (bootstrap vs.) son
-// snapshot._stateKey'e düş (önceki v3.1 davranışı, aynı maç).
 function learnFromMatch(fixtureId, actualHtFt) {
   const match = matchCache.get(fixtureId);
   if (!match || !match.snapshots || match.snapshots.length === 0) return;
   if (!FOCUS_RESULTS.includes(actualHtFt)) return;
 
-  // [FIX-9] Sinyal anındaki key öncelikli
   const pending = memory.pendingSignals[fixtureId];
   let key;
   if (pending?.stateKey) {
@@ -434,31 +663,23 @@ function learnFromMatch(fixtureId, actualHtFt) {
   console.log(`[Learn] "${key}" → ${actualHtFt} (sayı: ${memory.patterns[key][actualHtFt].count})`);
 }
 
-// [FIX-10] Laplace smoothing: (count+1) / (total + N)
-// N = FOCUS_RESULTS.length = 9
-// Her outcome için +1 prior → eski memory'de 0'lı yeni outcome'lar
-// (1/X, 2/X) artık X/X'in birikmiş count'una karşı şansını korur.
-// baseProb 1/N ile tutarlı; eski veriler silinmez.
 function predict(stateKey) {
-  const N       = FOCUS_RESULTS.length;          // 9
-  const basePrb = 1 / N;                          // ≈ 0.111
+  const N       = FOCUS_RESULTS.length;
+  const basePrb = 1 / N;
   const pattern = memory.patterns[stateKey];
   const result  = {};
 
-  // Varsayılan: veri yokken uniform prior
   for (const r of FOCUS_RESULTS)
     result[r] = { prob: +basePrb.toFixed(3), lift: 1.0, count: 0, confidence: 'none' };
 
   if (!pattern) return result;
 
-  // Ham gözlem toplamı (Laplace öncesi)
   let total = 0;
   for (const r of FOCUS_RESULTS) total += (pattern[r]?.count || 0);
   if (total < 2) return result;
 
   for (const r of FOCUS_RESULTS) {
     const cnt  = pattern[r]?.count || 0;
-    // [FIX-10] Laplace smoothing
     const prob = (cnt + 1) / (total + N);
     const lift = prob / basePrb;
     let confidence = 'low';
@@ -470,13 +691,13 @@ function predict(stateKey) {
 }
 
 function predictWithSimilarity(stateKey) {
-  const N         = FOCUS_RESULTS.length; // 9
-  const basePrb   = 1 / N;               // [FIX-10] predict() ile tutarlı
+  const N         = FOCUS_RESULTS.length;
+  const basePrb   = 1 / N;
   const direct    = predict(stateKey);
   const directTotal = direct['2/1'].total || 0;
   if (directTotal >= 5) return direct;
 
-  const neighbors  = [];
+  const neighbors   = [];
   const targetParts = stateKey.split('|');
   for (const k of Object.keys(memory.patterns)) {
     const parts = k.split('|');
@@ -508,7 +729,7 @@ function predictWithSimilarity(stateKey) {
   for (const r of FOCUS_RESULTS) {
     const prob = weightSum > 0 ? blended[r].prob / weightSum : 0;
     final[r] = {
-      prob: +prob.toFixed(3), lift: +(prob / basePrb).toFixed(2),  // [FIX-10]
+      prob: +prob.toFixed(3), lift: +(prob / basePrb).toFixed(2),
       count: blended[r].count, total: Math.round(weightSum),
       confidence: (weightSum >= 8 && prob >= 0.25) ? 'medium' : 'low',
     };
@@ -517,14 +738,14 @@ function predictWithSimilarity(stateKey) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 8 — AKILLI SİNYAL MOTORU (v3.1 - hasHtFt entegreli)
+// BÖLÜM 8 — AKILLI SİNYAL MOTORU
 // ════════════════════════════════════════════════════════════════════
-function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
-  const features  = extractFeatures(markets, changes, cumCache, snapshots);
+function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMarkets) {
+  const features  = extractFeatures(markets, changes, cumCache, snapshots, openingMarkets);
   const stateKey  = generateStateKey(features);
   const raw       = features.raw;
   const b         = features.buckets;
-  const hasHtFt   = features.hasHtFt; // [FIX-7]
+  const hasHtFt   = features.hasHtFt;
 
   if (snapshots.length > 0) snapshots[snapshots.length - 1]._stateKey = stateKey;
 
@@ -538,7 +759,6 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
 
   const hasMemory = memory.totalLearned >= BOOTSTRAP_THRESHOLD;
 
-  // Bootstrap sinyaller
   if (!hasMemory) {
     const evCum  = cumCache.ev_ft_cum  || 0;
     const depCum = cumCache.dep_ft_cum || 0;
@@ -552,7 +772,6 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
       signals.push({ type:'1/2', tier:'STANDART', rule:`[BOOTSTRAP] İYMS12=${raw.iyms12} dep_cum=${depCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
   }
 
-  // Pattern + Accuracy tabanlı sinyaller
   for (const outcome of FOCUS_RESULTS) {
     const p = predictions[outcome];
     if (p.lift < 1.20) continue;
@@ -567,7 +786,6 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
     let rule      = `State: ${stateKey.substring(0, 60)}...`;
     let precision = p.prob * 10;
     let liftVal   = p.lift;
-
     let effectiveLift = +(liftVal * multiplier).toFixed(2);
 
     if (effectiveLift >= 2.50 && p.confidence === 'high') {
@@ -591,13 +809,12 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
     const minProb = (p.total >= 10) ? 0.18 : (p.total >= 5) ? 0.22 : 0.28;
     if (p.prob < minProb) continue;
 
-    // [FIX-7] ht_ft yoksa lift cezası + tier düşürme + uyarı
     let htFtNote = '';
     if (!hasHtFt) {
       liftVal      = +(liftVal      * 0.70).toFixed(2);
       effectiveLift= +(effectiveLift* 0.70).toFixed(2);
       htFtNote     = ' ⚠IY/MS-YOK(oran.eksik)';
-      if (tier === 'ELITE')   tier = 'PREMIER';  // bir kademe düşür
+      if (tier === 'ELITE')   tier = 'PREMIER';
       if (tier === 'PREMIER') tier = 'STANDART';
     }
 
@@ -608,18 +825,18 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots) {
       lift: liftVal, effectiveLift,
       prob: p.prob, stateKey, trendStrength,
       histCount: p.count, accLabel, accuracy,
-      hasHtFt, // [FIX-7]
+      hasHtFt,
     });
   }
 
   const tierW = { ELITE: 3, PREMIER: 2, STANDART: 1 };
   signals.sort((a,c) => (tierW[c.tier]||0)-(tierW[a.tier]||0) || c.effectiveLift-a.effectiveLift);
 
-  return { signals, features, predictions, stateKey, hasHtFt }; // [FIX-7]
+  return { signals, features, predictions, stateKey, hasHtFt };
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 9 — YEREL YORUM (hasHtFt uyarısı eklendi) [FIX-7]
+// BÖLÜM 9 — YEREL YORUM
 // ════════════════════════════════════════════════════════════════════
 function generateLocalInterpretation(matchData) {
   const { signals, features, predictions, stateKey, hasHtFt } = matchData;
@@ -651,22 +868,29 @@ function generateLocalInterpretation(matchData) {
     accNote = `\n📏 Doğruluk: Henüz yeterli veri yok (<${ACCURACY_MIN_SAMPLES} ateşleme)`;
   }
 
-  // [FIX-7] ht_ft uyarısı
   const htFtWarning = (hasHtFt === false)
     ? '\n⚠️  IY/MS oranı yok — IY/MS tabanlı tahminler %30 cezalı, temkinli olun.'
     : '';
+
+  // Drop özeti — açılıştan hareket varsa ekle
+  const dropNotes = [];
+  if (f.iyms22_drop === 'heavy') dropNotes.push('IY/MS 2/2 açılıştan ağır düştü');
+  if (f.iyms21_drop === 'heavy') dropNotes.push('IY/MS 2/1 açılıştan ağır düştü');
+  if (f.ms1_drop    === 'heavy') dropNotes.push('MS1 açılıştan ağır düştü');
+  if (f.ou25o_drop  === 'heavy') dropNotes.push('2.5 üst açılıştan ağır düştü');
+  const dropNote = dropNotes.length > 0 ? `\n📉 Açılış Hareketi: ${dropNotes.join(' | ')}` : '';
 
   return (
     `📊 DURUM: ${stateKey.substring(0, 55)}...\n` +
     `${mkt}\n` +
     `🎯 TAHMİN: ${top.type} | ${top.tier} | Lift: ${top.lift}x (efektif: ${top.effectiveLift}x) | Olas: %${((top.prob||0)*100).toFixed(1)}\n` +
-    `📚 ${note}${accNote}${htFtWarning}\n` +
+    `📚 ${note}${accNote}${htFtWarning}${dropNote}\n` +
     `⚡ Trend: ${top.trendStrength} | İYMS21: ${r.iyms21||'N/A'} | MS1: ${r.ms1||'?'}`
   );
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 10 — SİNYAL LOGGER (v3.0'dan korundu)
+// BÖLÜM 10 — SİNYAL LOGGER
 // ════════════════════════════════════════════════════════════════════
 function logSignals(matchesWithSignals, cycleNo) {
   const now       = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
@@ -700,7 +924,7 @@ function logSignals(matchesWithSignals, cycleNo) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 10b — ALERT HELPERS (v3.0'dan korundu)
+// BÖLÜM 10b — ALERT HELPERS
 // ════════════════════════════════════════════════════════════════════
 function alreadyFired(fid, label) {
   return (firedAlerts[fid] || []).includes(label);
@@ -726,7 +950,7 @@ function markFired(fid, label, signalData) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 11 — MAÇ LİSTESİ (v3.0'dan korundu)
+// BÖLÜM 11 — MAÇ LİSTESİ
 // ════════════════════════════════════════════════════════════════════
 async function loadFixtures() {
   if (!sb) { console.warn('[Fixtures] Supabase bağlantısı yok'); return []; }
@@ -749,7 +973,7 @@ async function loadFixtures() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 12 — CANLI SKOR & ÖĞRENME (v3.0'dan korundu)
+// BÖLÜM 12 — CANLI SKOR & ÖĞRENME
 // ════════════════════════════════════════════════════════════════════
 function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
   if (htHome == null || ftHome == null) return null;
@@ -817,7 +1041,7 @@ async function syncLiveMatches() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 13 — ANA DÖNGÜ (v3.0'dan korundu, hasHtFt eklendi)
+// BÖLÜM 13 — ANA DÖNGÜ
 // ════════════════════════════════════════════════════════════════════
 function hoursToKickoff(ko) {
   if (!ko) return 999;
@@ -841,7 +1065,10 @@ async function runCycle() {
   console.log(`[Config]  Sinyal penceresi: ≤${SIGNAL_WINDOW_H*60}dk | Lookahead: ${LOOKAHEAD_H}sa`);
   console.log('═'.repeat(60));
 
-  if (cycleCount % 10 === 1) logAccuracyReport();
+  if (cycleCount % 10 === 1) {
+    logAccuracyReport();
+    if (memory.totalLearned >= 10) analyzeFeatureImportance();
+  }
 
   let nesineData;
   try {
@@ -877,7 +1104,8 @@ async function runCycle() {
     if (snapshots.length > 10) snapshots.shift();
 
     const { signals, features, predictions, stateKey, hasHtFt } = evaluateSmartSignals(
-      currMarkets, changes, { ev_ft_cum, dep_ft_cum }, snapshots
+      currMarkets, changes, { ev_ft_cum, dep_ft_cum }, snapshots,
+      prev?.openingMarkets
     );
 
     matchCache.set(fid, {
@@ -885,6 +1113,8 @@ async function runCycle() {
       kickoff: fix.kickoff, latestMarkets: currMarkets,
       ev_ft_cum, dep_ft_cum, snapshots,
       liveData: prev?.liveData || {},
+      // İlk döngüde açılış kaydedilir, sonraki döngülerde korunur:
+      openingMarkets: prev?.openingMarkets || currMarkets,
     });
 
     if (h2k > SIGNAL_WINDOW_H) {
@@ -903,8 +1133,7 @@ async function runCycle() {
     if (alreadyFired(fid, topLabel)) continue;
 
     const interpretation = generateLocalInterpretation({
-      signals, features, predictions, stateKey,
-      hasHtFt, // [FIX-7]
+      signals, features, predictions, stateKey, hasHtFt,
     });
 
     matchesWithSignals.push({
@@ -912,7 +1141,7 @@ async function runCycle() {
       kickoff: fix.kickoff, h2k,
       signals, features, interpretation,
       ev_ft_cum, dep_ft_cum,
-      hasHtFt, // [FIX-7]
+      hasHtFt,
     });
   }
 
@@ -939,16 +1168,17 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v3.2 — Self-Evaluating Market Engine  ║');
+  console.log('║  ScorePop Adaptive v3.3 — Self-Evaluating Market Engine  ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
   console.log(`║  Bootstrap eşiği   : ${String(BOOTSTRAP_THRESHOLD).padEnd(36)}║`);
   console.log(`║  Sinyal penceresi  : ≤${String(Math.round(SIGNAL_WINDOW_H*60)+'dk').padEnd(35)}║`);
   console.log(`║  Accuracy min örnek: ${String(ACCURACY_MIN_SAMPLES).padEnd(36)}║`);
   console.log(`║  Penalty / Boost   : <%${String((ACCURACY_PENALTY_THR*100).toFixed(0)).padEnd(9)} / >%${String((ACCURACY_BOOST_THR*100).toFixed(0)).padEnd(22)}║`);
-  console.log(`║  v3.1 FIX-7: ht_ft eksik → lift×0.70 + tier düşer      ║`);
-  console.log(`║  v3.1 FIX-8: FOCUS_RESULTS 1/X ve 2/X eklendi (9 sonuç)║`);
-  console.log(`║  v3.2 FIX-9: learnFromMatch → pending stateKey öncelikli ║`);
-  console.log(`║  v3.2 FIX-10: Laplace smoothing (cnt+1)/(total+9)        ║`);
+  console.log(`║  v3.3 FIX-11: recordMarketValue f={} dışına taşındı      ║`);
+  console.log(`║  v3.3 FIX-12: calcFromOpen tam versiyon (tüm marketler)  ║`);
+  console.log(`║  v3.3 FIX-13: calcFromOpen kullanımdan önce tanımlandı   ║`);
+  console.log(`║  v3.3 FIX-14: extractFeatures tüm drop bucket'ları       ║`);
+  console.log(`║  v3.3 FIX-15: parseMarkets yeni marketler eklendi        ║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
@@ -966,7 +1196,7 @@ async function main() {
     if (wait > 0 && remaining > wait) await new Promise(r => setTimeout(r, wait));
   }
 
-  logAccuracyReport();  
+  logAccuracyReport();
   saveCache();
 
   console.log('\n╔══════════════════════════════════════════════════════════╗');
