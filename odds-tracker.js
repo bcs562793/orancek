@@ -84,15 +84,33 @@ function resolvePendingSignal(fid, actualResult) {
   delete memory.pendingSignals[fid];
 }
 
+const EXPLORE_RATE = 0.15; // %15 ihtimalle bastırılmış sinyali yine de at
+
 function getAccuracyMultiplier(signalType) {
   const acc = memory.signalAccuracy[signalType];
+
+  // Yeterli veri yok → normal çalış
   if (!acc || acc.fired < ACCURACY_MIN_SAMPLES)
     return { multiplier: 1.0, label: 'yetersiz_örnek', accuracy: null };
+
   const accuracy = acc.correct / acc.fired;
+
   if (accuracy >= ACCURACY_BOOST_THR)
     return { multiplier: 1.4, label: `🟢 %${(accuracy*100).toFixed(0)} doğru`, accuracy };
-  if (accuracy <= ACCURACY_PENALTY_THR)
-    return { multiplier: 0.0, label: `🔴 %${(accuracy*100).toFixed(0)} doğru — bastırıldı`, accuracy };
+
+  if (accuracy <= ACCURACY_PENALTY_THR) {
+    // ← DEĞİŞİKLİK: tamamen kapatma, ara sıra keşfet
+    const explore = Math.random() < EXPLORE_RATE;
+    return {
+      multiplier: explore ? 0.5 : 0.0,
+      label: explore
+        ? `🔵 %${(accuracy*100).toFixed(0)} doğru — KEŞİF modu`
+        : `🔴 %${(accuracy*100).toFixed(0)} doğru — bastırıldı`,
+      accuracy,
+      isExplore: explore,
+    };
+  }
+
   return { multiplier: 1.0, label: `🟡 %${(accuracy*100).toFixed(0)} doğru`, accuracy };
 }
 
