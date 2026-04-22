@@ -178,7 +178,18 @@ function loadCache() {
       );
     } catch (e) { console.warn('[Memory] Yüklenemedi:', e.message); }
   }
-}
+
+// ← BURAYA EKLE:
+  for (const [type, acc] of Object.entries(memory.signalAccuracy)) {
+    if (acc.fired >= ACCURACY_MIN_SAMPLES) {
+      const accuracy = acc.correct / acc.fired;
+      if (accuracy <= ACCURACY_PENALTY_THR) {
+        console.log(`[AccReset] ${type} sıfırlandı (${acc.correct}/${acc.fired})`);
+        memory.signalAccuracy[type] = { fired: 0, correct: 0, recent: [] };
+      }
+    }
+  }
+}  // loadCache kapanışı
 
 function saveCache() {
   const obj = { savedAt: new Date().toISOString(), matchCache: {} };
