@@ -1,0 +1,209 @@
+name: 🎯 Odds Cache Deep Analysis
+
+on:
+  # ─── Manuel tetikleme (cache dosyası değişince) ───────────────────────────
+  workflow_dispatch:
+    inputs:
+      cache_file:
+        description: 'Cache dosyası yolu'
+        required: false
+        default: '__tracker_cache.json'
+
+  # ─── Cache değişince otomatik tetikle ─────────────────────────────────────
+  push:
+    paths:
+      - '__tracker_cache.json'
+      - '**/__tracker_cache.json'
+
+  # ─── Her gece 02:00 UTC ────────────────────────────────────────────────────
+  schedule:
+    - cron: '0 2 * * *'
+
+# ──────────────────────────────────────────────────────────────────────────────
+jobs:
+  analyze:
+    name: 📊 Odds Analizi
+    runs-on: ubuntu-latest
+    timeout-minutes: 60          # 1M satır için yeterli
+
+    env:
+      CACHE_FILE: ${{ github.event.inputs.cache_file || '__tracker_cache.json' }}
+      OUTPUT_DIR: reports
+      PYTHONUNBUFFERED: "1"      # anlık log çıktısı için
+
+    steps:
+      # ── 1. Kodu çek ─────────────────────────────────────────────────────────
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Python kur ───────────────────────────────────────────────────────
+      - name: 🐍 Python 3.11 kurulumu
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. Bağımlılıklar ────────────────────────────────────────────────────
+      - name: 📦 Bağımlılıkları yükle
+        run: |
+          pip install --upgrade pip
+          pip install ijson              # streaming JSON parser (büyük dosya için kritik)
+          # Ek paketler gerekirse requirements.txt'e ekle
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # ── 4. Cache dosyası kontrolü ───────────────────────────────────────────
+      - name: 🔍 Cache dosyası kontrol
+        id: cache_check
+        run: |
+          if [ ! -f "$CACHE_FILE" ]; then
+            echo "❌ Cache dosyası bulunamadı: $CACHE_FILE"
+            exit 1
+          fi
+          SIZE=$(du -sh "$CACHE_FILE" | cut -f1)
+          LINES=$(wc -l < "$CACHE_FILE" || echo "?")
+          echo "✅ Cache bulundu: $CACHE_FILE"
+          echo "   Boyut : $SIZE"
+          echo "   Satır : $LINES"
+          echo "cache_size=$SIZE" >> $GITHUB_OUTPUT
+          echo "cache_lines=$LINES" >> $GITHUB_OUTPUT
+
+      # ── 5. Ana analiz ────────────────────────────────────────────────────────
+      - name: 🧠 Odds analizi çalıştır
+        id: analysis
+        run: |
+          mkdir -p $OUTPUT_DIR
+          python analyze_odds.py \
+            --cache "$CACHE_FILE" \
+            --output "$OUTPUT_DIR" \
+            2>&1 | tee odds_analysis.log
+
+          # Çıkış kodu kontrolü
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "❌ Analiz başarısız oldu!"
+            exit 1
+          fi
+
+      # ── 6. Özet logunu parse et ──────────────────────────────────────────────
+      - name: 📋 Analiz özetini çıkar
+        if: always()
+        run: |
+          echo "## 📊 Odds Analiz Özeti" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metrik | Değer |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+
+          # Log'dan değerleri çek
+          TOTAL=$(grep "Toplam okundu" odds_analysis.log | grep -oP '[\d,]+' | tr -d ',' | tail -1 || echo "?")
+          VALID=$(grep "Geçerli maç" odds_analysis.log | grep -oP '[\d,]+' | tr -d ',' | tail -1 || echo "?")
+          CLUSTERS=$(grep "Toplam küme" odds_analysis.log | grep -oP '[\d,]+' | tr -d ',' | tail -1 || echo "?")
+          ACCURACY=$(grep "doğruluk oranı" odds_analysis.log | grep -oP '[\d.]+%' | tail -1 || echo "?")
+          HIGH_CONF=$(grep "Yüksek güven" odds_analysis.log | grep -oP '[\d,]+' | tr -d ',' | head -1 || echo "?")
+
+          echo "| Cache Boyutu | ${{ steps.cache_check.outputs.cache_size }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cache Satırı | ${{ steps.cache_check.outputs.cache_lines }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Toplam Okunan | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Geçerli Maç | $VALID |" >> $GITHUB_STEP_SUMMARY
+          echo "| Oran Kümesi | $CLUSTERS |" >> $GITHUB_STEP_SUMMARY
+          echo "| AI Doğruluk | $ACCURACY |" >> $GITHUB_STEP_SUMMARY
+          echo "| Yüksek Güven | $HIGH_CONF |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Pattern tablosunu ekle
+          echo "### 🔄 Hareket Patternları" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -A 20 "Pattern → Sonuç korelasyonu" odds_analysis.log | head -25 || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Küme özetini ekle
+          echo "### 📦 En Büyük Oran Kümeleri" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -A 12 "En büyük 10 oran kümesi" odds_analysis.log | head -15 || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # ── 7. Raporları artifact olarak sakla ───────────────────────────────────
+      - name: 📁 Raporları yükle (artifact)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: odds-analysis-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.OUTPUT_DIR }}/
+            odds_analysis.log
+          retention-days: 30
+
+      # ── 8. JSON raporunu GitHub özet sayfasına ekle ──────────────────────────
+      - name: 📈 JSON rapor içeriğini göster
+        if: always()
+        run: |
+          if [ -f "$OUTPUT_DIR/analysis_report.json" ]; then
+            echo "### 🎯 Top Tahminler (AI Skoruna göre)" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json, sys
+          with open('$OUTPUT_DIR/analysis_report.json') as f:
+              r = json.load(f)
+          s = r.get('summary', {})
+          print(json.dumps(s, indent=2, ensure_ascii=False))
+            " 2>/dev/null || echo "JSON parse hatası"
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ── 9. Başarısız olursa bildirim ─────────────────────────────────────────
+      - name: ❌ Hata bildirimi
+        if: failure()
+        run: |
+          echo "## ❌ Analiz Başarısız" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Son 50 log satırı:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -50 odds_analysis.log 2>/dev/null || echo "Log bulunamadı"
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Opsiyonel: Sonuçları derleme ve karşılaştırma job'ı
+  # ────────────────────────────────────────────────────────────────────────────
+  compare-runs:
+    name: 📈 Çalıştırma Karşılaştırması
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: success()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⬇️ Bu çalıştırmanın raporunu indir
+        uses: actions/download-artifact@v4
+        with:
+          name: odds-analysis-${{ github.run_number }}-${{ github.run_attempt }}
+          path: current_run/
+
+      - name: 📊 Çalıştırma karşılaştırma
+        run: |
+          echo "## 📈 Model Performans Takibi" >> $GITHUB_STEP_SUMMARY
+          if [ -f current_run/analysis_report.json ]; then
+            python3 << 'EOF'
+import json, os
+
+with open("current_run/analysis_report.json") as f:
+    report = json.load(f)
+
+summary = report.get("summary", {})
+print(f"Tarih       : {report.get('generated_at', '?')}")
+print(f"Toplam maç  : {summary.get('total_matches', '?'):,}")
+print(f"Kümeler     : {summary.get('total_clusters', '?'):,}")
+print(f"AI Doğruluk : %{summary.get('ai_accuracy_pct', 0):.2f}")
+print(f"Test edilen : {summary.get('tested_matches', '?'):,}")
+
+# Movement pattern özeti
+patterns = report.get("movement_patterns", {})
+if patterns:
+    print("\n--- Steam Analizi ---")
+    for p, d in patterns.items():
+        if "steam" in p:
+            out = p.replace("steam_", "")
+            rate = d.get("rates", {}).get(out, 0)
+            print(f"  {p}: %{rate:.1f} doğruluk ({d['total']:,} maç)")
+EOF
+          fi
