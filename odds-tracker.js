@@ -167,6 +167,17 @@ function saveCache() {
 function pushToGit() {
   const { execSync } = require('child_process');
   try {
+    // Takılı rebase varsa temizle
+    try {
+      const rebaseMergeExists = fs.existsSync('.git/rebase-merge');
+      const rebaseApplyExists = fs.existsSync('.git/rebase-apply');
+      if (rebaseMergeExists || rebaseApplyExists) {
+        console.warn('[Git] ⚠️ Takılı rebase tespit edildi, abort yapılıyor...');
+        execSync('git rebase --abort', { stdio: 'pipe' });
+        console.log('[Git] Rebase abort edildi.');
+      }
+    } catch { /* abort da başarısız olursa devam et */ }
+
     execSync('git config user.email "scorepop@bot.com"', { stdio: 'pipe' });
     execSync('git config user.name "ScorePop Bot"',      { stdio: 'pipe' });
     execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
@@ -174,9 +185,8 @@ function pushToGit() {
     if (!staged) { console.log('[Git] ⏩ Değişiklik yok.'); return; }
     const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
     execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
-    // [FIX-GIT] --autostash: unstaged değişiklikler varsa stash yap, pull sonrası geri al
     execSync('git pull --rebase --autostash origin main', { stdio: 'pipe' });
-    execSync('git push origin main',                       { stdio: 'pipe' });
+    execSync('git push origin main', { stdio: 'pipe' });
     console.log('[Git] ✅ Push başarılı.');
   } catch (e) {
     if (e.stderr) console.warn('[Git] STDERR:', e.stderr.toString().trim());
