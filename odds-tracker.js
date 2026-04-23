@@ -38,7 +38,7 @@ const FIRED_FILE          = process.env.FIRED_FILE   || 'fired_alerts.json';
 const MEMORY_FILE         = process.env.MEMORY_FILE  || 'learned_memory.json';
 const DRY_RUN             = process.env.DRY_RUN === 'true';
 const BOOTSTRAP_THRESHOLD = parseInt(process.env.BOOTSTRAP_THRESHOLD  || '20');
-const SIGNAL_WINDOW_H     = parseFloat(process.env.SIGNAL_WINDOW_H    || '0.5');
+const SIGNAL_WINDOW_H     = parseFloat(process.env.SIGNAL_WINDOW_H    || '0.75'); // 45 dk
 const ACCURACY_MIN_SAMPLES= parseInt(process.env.ACCURACY_MIN_SAMPLES || '10');
 const ACCURACY_PENALTY_THR= parseFloat(process.env.ACCURACY_PENALTY_THR || '0.20');
 const ACCURACY_BOOST_THR  = parseFloat(process.env.ACCURACY_BOOST_THR   || '0.45');
@@ -67,7 +67,8 @@ const FOCUS_RESULTS = ['1/1', '2/1', '1/X', '2/X', 'X/X', 'X/2', 'X/1', '2/2', '
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 0 — DOĞRULUK MOTORU
 // ════════════════════════════════════════════════════════════════════
-// resolvePendingSignal içine — doğru/yanlış geçmişi tut
+const EXPLORE_RATE = 0.20; // Bastırılan sinyallerin %20'si keşif için geçer
+
 function resolvePendingSignal(fid, actualResult) {
   const pending = memory.pendingSignals[fid];
   if (!pending) return;
@@ -78,42 +79,41 @@ function resolvePendingSignal(fid, actualResult) {
   const isCorrect = topSignal === actualResult;
   if (isCorrect) acc.correct++;
 
-  // Son 20 sonucu tut
+  // Son 20 sonucu tut — eski verilerden daha hızlı adapte olur
   if (!acc.recent) acc.recent = [];
   acc.recent.push(isCorrect);
   if (acc.recent.length > 20) acc.recent.shift();
 
-  const accuracy = acc.fired > 0 ? (acc.correct / acc.fired) : 0;
+  const accuracy  = acc.fired > 0 ? (acc.correct / acc.fired) : 0;
+  const recentAcc = acc.recent.length > 0
+    ? acc.recent.filter(Boolean).length / acc.recent.length : null;
   console.log(
-    `  [Accuracy] ${topSignal} (${tier}) → ${isCorrect ? '✅' : '❌'}` +
+    `  [Accuracy] ${topSignal} (${tier}) → ${isCorrect ? '✅ DOĞRU' : '❌ YANLIŞ'}` +
     ` | Genel: %${(accuracy*100).toFixed(1)} (${acc.correct}/${acc.fired})` +
-    ` | Son20: %${acc.recent.length > 0 ? (acc.recent.filter(Boolean).length/acc.recent.length*100).toFixed(1) : 'N/A'}`
+    ` | Son20: %${recentAcc !== null ? (recentAcc*100).toFixed(1) : 'N/A'}`
   );
   delete memory.pendingSignals[fid];
 }
-
-const EXPLORE_RATE = 0.20; // %20 keşif oranı
 
 function getAccuracyMultiplier(signalType) {
   const acc = memory.signalAccuracy[signalType];
   if (!acc || acc.fired < ACCURACY_MIN_SAMPLES)
     return { multiplier: 1.0, label: 'yetersiz_örnek', accuracy: null };
 
-  // Son 20 varsa onu kullan, yoksa genel
-  const recent = acc.recent || [];
+  // Son 20 varsa onu kullan — piyasa koşulları değişebilir
+  const recent   = acc.recent || [];
   const accuracy = recent.length >= 5
-    ? recent.filter(Boolean).length / recent.length   // son 20 pencere
-    : acc.correct / acc.fired;                        // genel
+    ? recent.filter(Boolean).length / recent.length
+    : acc.correct / acc.fired;
 
   if (accuracy >= ACCURACY_BOOST_THR)
     return { multiplier: 1.4, label: `🟢 %${(accuracy*100).toFixed(0)} doğru`, accuracy };
 
   if (accuracy <= ACCURACY_PENALTY_THR) {
-    // Tamamen kapatma — %20 ihtimalle keşfet
-    const explore = Math.random() < EXPLORE_RATE;
-    if (explore) {
+    // Tamamen kapatma yerine %20 ihtimalle keşif yap
+    if (Math.random() < EXPLORE_RATE) {
       console.log(`[AccFilter] ${signalType} KEŞİF modu (%${(accuracy*100).toFixed(0)} doğru)`);
-      return { multiplier: 0.6, label: `🔵 keşif`, accuracy, isExplore: true };
+      return { multiplier: 0.6, label: '🔵 keşif', accuracy, isExplore: true };
     }
     return { multiplier: 0.0, label: `🔴 %${(accuracy*100).toFixed(0)} doğru — bastırıldı`, accuracy };
   }
@@ -179,17 +179,17 @@ function loadCache() {
     } catch (e) { console.warn('[Memory] Yüklenemedi:', e.message); }
   }
 
-// ← BURAYA EKLE:
+  // Bastırılmış sinyalleri sıfırla — kirli geçmişle öğrenmeye devam etmesin
   for (const [type, acc] of Object.entries(memory.signalAccuracy)) {
     if (acc.fired >= ACCURACY_MIN_SAMPLES) {
       const accuracy = acc.correct / acc.fired;
       if (accuracy <= ACCURACY_PENALTY_THR) {
-        console.log(`[AccReset] ${type} sıfırlandı (${acc.correct}/${acc.fired})`);
+        console.log(`[AccReset] ${type} sıfırlandı (${acc.correct}/${acc.fired} = %${(accuracy*100).toFixed(0)})`);
         memory.signalAccuracy[type] = { fired: 0, correct: 0, recent: [] };
       }
     }
   }
-}  // loadCache kapanışı
+}
 
 function saveCache() {
   const obj = { savedAt: new Date().toISOString(), matchCache: {} };
@@ -203,22 +203,24 @@ function saveCache() {
 function pushToGit() {
   const { execSync } = require('child_process');
   try {
+    // Takılı rebase/merge varsa temizle
+    if (fs.existsSync('.git/rebase-merge') || fs.existsSync('.git/rebase-apply')) {
+      console.warn('[Git] ⚠️ Takılı rebase tespit edildi, abort yapılıyor...');
+      try { execSync('git rebase --abort', { stdio: 'pipe' }); } catch {}
+    }
+    if (fs.existsSync('.git/MERGE_HEAD')) {
+      try { execSync('git merge --abort', { stdio: 'pipe' }); } catch {}
+    }
+
     execSync('git config user.email "scorepop@bot.com"', { stdio: 'pipe' });
     execSync('git config user.name "ScorePop Bot"',      { stdio: 'pipe' });
-
-    // Rebase/merge durumlarını temizle
-    try { execSync('git rebase --abort', { stdio: 'pipe' }); } catch {}
-    try { execSync('git merge --abort',  { stdio: 'pipe' }); } catch {}
-
     execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
     const staged = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
     if (!staged) { console.log('[Git] ⏩ Değişiklik yok.'); return; }
-
     const msg = `chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
     execSync(`git commit -m "${msg}"`, { stdio: 'pipe' });
-
-    // Rebase yerine force push — memory dosyaları bot'a ait, conflict olmamalı
-    execSync('git push origin main --force', { stdio: 'pipe' });
+    execSync('git pull --rebase --autostash origin main', { stdio: 'pipe' });
+    execSync('git push origin main', { stdio: 'pipe' });
     console.log('[Git] ✅ Push başarılı.');
   } catch (e) {
     if (e.stderr) console.warn('[Git] STDERR:', e.stderr.toString().trim());
@@ -652,26 +654,25 @@ function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) 
 
 function generateStateKey(features) {
   const b = features.buckets;
+
+  // Feature importance sıralamasına göre en ayırt edici 6 boyut seçildi.
+  // Çıkarılanlar: evft_sign, depft_sign, evmom, depmon, div_ev_to_dep
+  //   → hepsi 4.44x, birbirini tekrar eden "hareketsiz piyasa" etiketleri
+  // Çıkarılanlar: ms1d, ms2d, ou25od
+  //   → büyük çoğunluğu 'none'/'flat', ayırt edici değil
+  // Kalan: 6 boyut → 4^6 ≈ 4096 kombinasyon → 351 öğrenme ile ~12 maç/pattern
+
   const iyms21Key = (b.iyms21_bucket !== 'none') ? `iyms21_${b.iyms21_bucket}` : 'iyms21_na';
   const iy2Key    = (b.iy2_bucket    !== 'none') ? `iy2_${b.iy2_bucket}`       : 'iy2_na';
   const au25Key   = (b.au25o_bucket  !== 'none') ? `au25_${b.au25o_bucket}`    : 'au25_na';
 
   return [
-    `ms1_${b.ms1_bucket}`,
-    iy2Key,
-    `evft_${b.ev_ft_sign}`,
-    `depft_${b.dep_ft_sign}`,
-    iyms21Key,
-    `evmom_${b.ev_momentum}`,
-    `depmon_${b.dep_momentum}`,
-    `div_${b.div_ev_to_dep}`,
-    `ms2_${b.ms2_bucket}`,
-    au25Key,
-    // Açılıştan hareket boyutları (en bilgi yoğun 4):
-    `ms1d_${b.ms1_drop}`,        // ev favori mi giderek?
-    `ms2d_${b.ms2_drop}`,        // dep favori mi giderek?
-    `iyms22d_${b.iyms22_drop}`,  // IY/MS 2/2'ye para mı giriyor?
-    `ou25od_${b.ou25o_drop}`,    // gol beklentisi artıyor mu?
+    `ms1_${b.ms1_bucket}`,      // Ev MS gücü         (lift: 4.61x)
+    iy2Key,                      // Dep IY gücü        (lift: 4.8x)
+    iyms21Key,                   // Dep IY/MS favori   (lift: 6x) ← EN KRİTİK
+    `ms2_${b.ms2_bucket}`,      // Dep MS gücü        (lift: 4.61x)
+    au25Key,                     // Gol beklentisi     (lift: 6x)
+    `iyms22d_${b.iyms22_drop}`, // 2/2 açılış hareketi (lift: 6x)
   ].join('|');
 }
 
@@ -736,7 +737,10 @@ function predictWithSimilarity(stateKey) {
   const N         = FOCUS_RESULTS.length;
   const basePrb   = 1 / N;
   const direct    = predict(stateKey);
-  const directTotal = direct['2/1'].total || 0;
+  // [FIX-16] Sadece 2/1'e bakmak yerine tüm outcome'ların max total'ını al.
+  // Eğer pattern'de 2/1 hiç görülmediyse total=0 ama 1/1 için 8 örnek
+  // olsa bile komşuya düşüyordu — artık en dolu outcome'a bakılıyor.
+  const directTotal = Math.max(...FOCUS_RESULTS.map(r => direct[r].total || 0));
   if (directTotal >= 5) return direct;
 
   const neighbors   = [];
@@ -804,13 +808,21 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
   if (!hasMemory) {
     const evCum  = cumCache.ev_ft_cum  || 0;
     const depCum = cumCache.dep_ft_cum || 0;
-    if (raw.iyms21 && raw.iyms21 <= 12 && evCum <= -4)
-      signals.push({ type:'2/1', tier:'STANDART', rule:`[BOOTSTRAP] İYMS21=${raw.iyms21} ev_cum=${evCum}`, prec:5.0, lift:1.5, effectiveLift:1.5, prob:0.15, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.ms1 && raw.ms1 <= 1.50 && evCum <= -3)
+    // [FIX-17] Bootstrap mantık düzeltmesi:
+    // 2/1: dep her iki yarı da baskın → depCum düşmeli (dep para giriyor)
+    // X/1: IY dep önde ama FT ev dönüyor → iyms21 düşük + evCum düşüyor
+    // 1/1: ev her iki yarı favori → ms1 düşük + evCum düşüyor
+    // 2/2: dep her iki yarı baskın → iyms22 düşük + depCum düşüyor
+    // Eşikler gevşetildi: 12→18, -4→-2 (daha fazla maç yakalanır)
+    if (raw.iyms21 && raw.iyms21 <= 18 && depCum <= -2)
+      signals.push({ type:'2/1', tier:'STANDART', rule:`[BOOTSTRAP] İYMS21=${raw.iyms21} dep_cum=${depCum}`, prec:5.0, lift:1.5, effectiveLift:1.5, prob:0.15, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
+    if (raw.iyms21 && raw.iyms21 <= 18 && evCum <= -2)
+      signals.push({ type:'X/1', tier:'STANDART', rule:`[BOOTSTRAP] İYMS21=${raw.iyms21} ev_cum=${evCum} (IY dep→FT ev dönüşü)`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
+    if (raw.ms1 && raw.ms1 <= 1.60 && evCum <= -2)
       signals.push({ type:'1/1', tier:'STANDART', rule:`[BOOTSTRAP] MS1=${raw.ms1} ev_cum=${evCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.iyms22 && raw.iyms22 <= 6 && depCum <= -3)
+    if (raw.iyms22 && raw.iyms22 <= 8 && depCum <= -2)
       signals.push({ type:'2/2', tier:'STANDART', rule:`[BOOTSTRAP] İYMS22=${raw.iyms22} dep_cum=${depCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.iyms12 && raw.iyms12 <= 12 && depCum <= -4)
+    if (raw.iyms12 && raw.iyms12 <= 18 && depCum <= -2)
       signals.push({ type:'1/2', tier:'STANDART', rule:`[BOOTSTRAP] İYMS12=${raw.iyms12} dep_cum=${depCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
   }
 
@@ -986,7 +998,7 @@ function markFired(fid, label, signalData) {
       signalLabel: label,
     };
     if (!memory.signalAccuracy[signalData.type])
-    memory.signalAccuracy[signalData.type] = { fired: 0, correct: 0, recent: [] };
+      memory.signalAccuracy[signalData.type] = { fired: 0, correct: 0 };
     memory.signalAccuracy[signalData.type].fired++;
   }
 }
@@ -1165,14 +1177,27 @@ async function runCycle() {
       continue;
     }
 
-    if (signals.length === 0) continue;
+    if (signals.length === 0) {
+      console.log(`[❌ F1-SinyalYok] ${fix.home_team} vs ${fix.away_team} | learned=${memory.totalLearned}`);
+      continue;
+    }
     const hasHighTier = signals.some(s => s.tier === 'ELITE' || s.tier === 'PREMIER');
     const isBootstrap = signals.every(s => s.trendStrength === 'bootstrap');
-    if (!hasHighTier && signals.length < MIN_SIGNALS && !isBootstrap) continue;
+    if (!hasHighTier && signals.length < MIN_SIGNALS && !isBootstrap) {
+      console.log(
+        `[❌ F2-TierFiltre] ${fix.home_team} vs ${fix.away_team}` +
+        ` | ${signals.map(s => s.type+'('+s.tier+')').join(', ')}` +
+        ` | highTier=${hasHighTier} bootstrap=${isBootstrap}`
+      );
+      continue;
+    }
 
     const topSignal = signals[0];
     const topLabel  = `${topSignal.type}_${topSignal.tier}`;
-    if (alreadyFired(fid, topLabel)) continue;
+    if (alreadyFired(fid, topLabel)) {
+      console.log(`[❌ F3-ZatenAteşlendi] ${fix.home_team} vs ${fix.away_team} | ${topLabel}`);
+      continue;
+    }
 
     const interpretation = generateLocalInterpretation({
       signals, features, predictions, stateKey, hasHtFt,
