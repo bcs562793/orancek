@@ -1,26 +1,33 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v3.3
+ * ai_tracker.js — ScorePop Adaptive Tracker v3.4
  * ═══════════════════════════════════════════════════════════════════
- * v3.3 değişiklikleri (v3.2 üzerine):
+ * v3.4 değişiklikleri (v3.3 üzerine):
  *
- *  [FIX-11] recordMarketValue syntax hatası:
- *    • extractFeatures() içinde const f={} DIŞINA taşındı.
- *    • Obje literal içinde statement yazılamaz — kod çalışmıyordu.
+ *  [FIX-A] syncLiveMatches — FT retry kilidi kaldırıldı:
+ *    • prevLive.status === 'FT' ama ftHome null ise bir sonraki döngüde
+ *      tekrar denenir. Önceki "tek sefer" koşulu öğrenmeyi tamamen durduruyordu.
+ *    • ftHome / ftAway önceki başarılı değer korunur, null gelirse güncellenmez.
  *
- *  [FIX-12] calcFromOpen tam versiyon:
- *    • Sadece 7 pair yerine tüm marketler eklendi.
- *    • ou25, ou15, ou35, btts, ht_1x2 away/draw, 2h_1x2, X/X, X/1 vb.
+ *  [FIX-B] AccReset mekanizması kaldırıldı:
+ *    • Her loadCache'de düşük doğruluklu sinyalleri sıfırlayan blok silindi.
+ *    • fired/correct birikimi artık kesilmiyor. Sadece uyarı loglanıyor.
+ *    • recent[] dizisi yoksa tüm entry'lerde başlatılıyor.
  *
- *  [FIX-13] calcFromOpen yerleşimi:
- *    • Fonksiyon kullanıldığı yerden önce tanımlandı (hoisting bağımlılığı kaldırıldı).
+ *  [FIX-C] Eski format pendingSignals temizlendi:
+ *    • 10-boyutlu eski stateKey formatındaki bekleyen sinyaller loadCache'de
+ *      silinir. Bunlar çözümlenemez, birikmelerinin anlamı yok.
  *
- *  [FIX-14] extractFeatures f objesi genişletildi:
- *    • ou25o_drop, bttsy_drop, iy2_drop, ou15o_drop vb. eklendi.
+ *  [FIX-D] learnFromMatch eski format stateKey'i atlar:
+ *    • 6-boyut + iyms22d kontrolü — eski snapshot'lar yeni pattern'e karışmaz.
  *
- *  [FIX-15] parseMarkets yeni marketler:
- *    • ou45, ht_ou15, ht_ou05, dc_2h eklendi (MTID doğrulama gerekebilir).
+ *  [FIX-E] markFired'da recent[] başlatma:
+ *    • signalAccuracy entry'si oluşturulurken recent:[] eklendi.
  *
- *  v3.2'den korunanlar: FIX-9, FIX-10, FIX-7, FIX-8 ve tüm v3.0 özellikleri.
+ *  [FIX-F] Supabase ht_home_score / ht_away_score desteği:
+ *    • live_matches sorgusuna ht sütunları eklendi (mevcut değilse null gelir,
+ *      prevLive.htHome fallback'i devreye girer — geriye dönük uyumlu).
+ *
+ *  v3.3'ten korunanlar: FIX-11..15 ve tüm v3.0 özellikleri.
  */
 'use strict';
 
@@ -179,16 +186,31 @@ function loadCache() {
     } catch (e) { console.warn('[Memory] Yüklenemedi:', e.message); }
   }
 
-  // Bastırılmış sinyalleri sıfırla — kirli geçmişle öğrenmeye devam etmesin
+  // [FIX-B] AccReset KALDIRILDI — sıfırlama öğrenmeyi öldürüyordu.
+  // getAccuracyMultiplier zaten düşük doğruluklu sinyalleri bastırıyor;
+  // fired/correct birikmesi KESILMEMALI. Sadece uyarı ver.
   for (const [type, acc] of Object.entries(memory.signalAccuracy)) {
+    if (!acc.recent) acc.recent = [];
     if (acc.fired >= ACCURACY_MIN_SAMPLES) {
       const accuracy = acc.correct / acc.fired;
       if (accuracy <= ACCURACY_PENALTY_THR) {
-        console.log(`[AccReset] ${type} sıfırlandı (${acc.correct}/${acc.fired} = %${(accuracy*100).toFixed(0)})`);
-        memory.signalAccuracy[type] = { fired: 0, correct: 0, recent: [] };
+        console.log(`[AccWarn] ${type} doğruluk düşük: %${(accuracy*100).toFixed(0)} (${acc.correct}/${acc.fired}) — bastırılacak ama sıfırlanmayacak`);
       }
     }
   }
+
+  // [FIX-C] Eski format pendingSignals temizle (10-boyutlu eski stateKey formatı)
+  let stalePending = 0;
+  for (const [fid, p] of Object.entries(memory.pendingSignals)) {
+    const sk = p.stateKey || '';
+    const parts = sk.split('|');
+    if (parts.length !== 6 || !sk.includes('iyms22d')) {
+      delete memory.pendingSignals[fid];
+      stalePending++;
+    }
+  }
+  if (stalePending > 0)
+    console.log(`[Fix-C] ${stalePending} eski format pendingSignal temizlendi.`);
 }
 
 function saveCache() {
@@ -698,6 +720,13 @@ function learnFromMatch(fixtureId, actualHtFt) {
     key = lastSnap._stateKey;
   }
 
+  // [FIX-D] Eski format stateKey'leri atla — yeni kod bunları bulamaz
+  const keyParts = key.split('|');
+  if (keyParts.length !== 6 || !key.includes('iyms22d')) {
+    console.warn(`[Learn] fixture=${fixtureId} eski format stateKey → atlandı (${key.substring(0,50)}...)`);
+    return;
+  }
+
   if (!memory.patterns[key]) memory.patterns[key] = {};
   if (!memory.patterns[key][actualHtFt])
     memory.patterns[key][actualHtFt] = { count: 0, firstSeen: new Date().toISOString() };
@@ -1027,7 +1056,10 @@ function markFired(fid, label, signalData) {
       signalLabel: label,
     };
     if (!memory.signalAccuracy[signalData.type])
-      memory.signalAccuracy[signalData.type] = { fired: 0, correct: 0 };
+      // [FIX-E] recent[] her zaman başlatılsın
+      memory.signalAccuracy[signalData.type] = { fired: 0, correct: 0, recent: [] };
+    if (!memory.signalAccuracy[signalData.type].recent)
+      memory.signalAccuracy[signalData.type].recent = [];
     memory.signalAccuracy[signalData.type].fired++;
   }
 }
@@ -1069,9 +1101,10 @@ async function syncLiveMatches() {
   if (!sb) return;
   let liveRows;
   try {
+    // [FIX-F] ht_home_score / ht_away_score sütunları varsa çek (yoksa graceful devam)
     const { data, error } = await sb
       .from('live_matches')
-      .select('fixture_id, status_short, home_score, away_score')
+      .select('fixture_id, status_short, home_score, away_score, ht_home_score, ht_away_score')
       .in('status_short', ['1H','HT','2H','FT']);
     if (error) { console.error('[Live] Supabase hata:', error.message); return; }
     liveRows = data || [];
@@ -1084,27 +1117,39 @@ async function syncLiveMatches() {
   for (const row of liveRows) {
     const fid    = String(row.fixture_id);
     const status = row.status_short;
-    const hScore = row.home_score ?? null;
-    const aScore = row.away_score ?? null;
+    const hScore  = row.home_score    ?? null;
+    const aScore  = row.away_score    ?? null;
+    // [FIX-F] Supabase'de ht sütunları varsa FT anında da HT skoru bilinir
+    const htScore = row.ht_home_score ?? null;
+    const atScore = row.ht_away_score ?? null;
     matchedLive++;
     const match    = matchCache.get(fid);
     if (!match) continue;
     const prevLive = match.liveData || {};
+    // [FIX-A] FT'de ftHome null geldiyse bir sonraki döngüde tekrar dene (retry guard)
+    const ftNeedsRetry = status === 'FT' && prevLive.status === 'FT' && !prevLive.ftHome;
     if (prevLive.status === status && status !== 'FT') continue;
-    let htHome = prevLive.htHome ?? null;
-    let htAway = prevLive.htAway ?? null;
-    let ftHome=null, ftAway=null, htFtResult=null;
+    if (prevLive.status === 'FT' && !ftNeedsRetry) continue;
+
+    // [FIX-F] htScore Supabase'den geldiyse prevLive'ı ezebilir
+    let htHome = htScore ?? prevLive.htHome ?? null;
+    let htAway = atScore ?? prevLive.htAway ?? null;
+    let ftHome = prevLive.ftHome ?? null;
+    let ftAway = prevLive.ftAway ?? null;
+    let htFtResult = prevLive.htFtResult ?? null;
 
     if (status === 'HT') {
       htHome = hScore; htAway = aScore;
       console.log(`  ⏸ HT: ${match.name} | İY ${htHome}-${htAway}`);
-    } else if (status === 'FT' && prevLive.status !== 'FT') {
-      ftHome = hScore; ftAway = aScore;
+    } else if (status === 'FT') {
+      // [FIX-A] hScore/aScore doluysa güncelle (her retry'da dene)
+      if (hScore != null) { ftHome = hScore; ftAway = aScore; }
       htFtResult = calcHtFtResult(htHome, htAway, ftHome, ftAway);
+      const retryTag = ftNeedsRetry ? ' [RETRY]' : '';
       console.log(
-        `  🏁 FT: ${match.name}` +
+        `  🏁 FT${retryTag}: ${match.name}` +
         ` | İY: ${htHome??'?'}-${htAway??'?'}` +
-        ` → MS: ${ftHome}-${ftAway}` +
+        ` → MS: ${ftHome??'?'}-${ftAway??'?'}` +
         ` | HT/FT: ${htFtResult||'hesaplanamadı'}`
       );
       if (htFtResult) {
@@ -1113,7 +1158,7 @@ async function syncLiveMatches() {
         learnFromMatch(fid, htFtResult);
         learnedCount++;
       } else {
-        console.warn(`  ⚠️ ${match.name}: HT skoru yok — öğrenme/çözümleme atlandı`);
+        console.warn(`  ⚠️ ${match.name}: skor eksik — sonraki döngüde tekrar denenecek`);
       }
     }
     match.liveData = { status, htHome, htAway, ftHome, ftAway, htFtResult };
@@ -1264,17 +1309,17 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v3.3 — Self-Evaluating Market Engine  ║');
+  console.log('║  ScorePop Adaptive v3.4 — Self-Evaluating Market Engine  ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
   console.log(`║  Bootstrap eşiği   : ${String(BOOTSTRAP_THRESHOLD).padEnd(36)}║`);
   console.log(`║  Sinyal penceresi  : ≤${String(Math.round(SIGNAL_WINDOW_H*60)+'dk').padEnd(35)}║`);
   console.log(`║  Accuracy min örnek: ${String(ACCURACY_MIN_SAMPLES).padEnd(36)}║`);
   console.log(`║  Penalty / Boost   : <%${String((ACCURACY_PENALTY_THR*100).toFixed(0)).padEnd(9)} / >%${String((ACCURACY_BOOST_THR*100).toFixed(0)).padEnd(22)}║`);
-  console.log(`║  v3.3 FIX-11: recordMarketValue f={} dışına taşındı      ║`);
-  console.log(`║  v3.3 FIX-12: calcFromOpen tam versiyon (tüm marketler)  ║`);
-  console.log(`║  v3.3 FIX-13: calcFromOpen kullanımdan önce tanımlandı   ║`);
-  console.log(`║  v3.3 FIX-14: extractFeatures tüm drop bucket'ları       ║`);
-  console.log(`║  v3.3 FIX-15: parseMarkets yeni marketler eklendi        ║`);
+  console.log(`║  v3.4 FIX-A: FT retry kilidi kaldırıldı                 ║`);
+  console.log(`║  v3.4 FIX-B: AccReset kaldırıldı, recent[] başlatıldı   ║`);
+  console.log(`║  v3.4 FIX-C: Eski pendingSignals migrasyonu              ║`);
+  console.log(`║  v3.4 FIX-D: learnFromMatch eski stateKey koruması       ║`);
+  console.log(`║  v3.4 FIX-F: Supabase ht_home/away_score desteği        ║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
