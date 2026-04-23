@@ -42,7 +42,7 @@ const SIGNAL_WINDOW_H     = parseFloat(process.env.SIGNAL_WINDOW_H    || '0.75')
 const ACCURACY_MIN_SAMPLES= parseInt(process.env.ACCURACY_MIN_SAMPLES || '10');
 const ACCURACY_PENALTY_THR= parseFloat(process.env.ACCURACY_PENALTY_THR || '0.20');
 const ACCURACY_BOOST_THR  = parseFloat(process.env.ACCURACY_BOOST_THR   || '0.45');
-const MIN_SIGNALS         = 2;
+const MIN_SIGNALS         = 1;
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -805,30 +805,56 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
 
   const hasMemory = memory.totalLearned >= BOOTSTRAP_THRESHOLD;
 
-  if (!hasMemory) {
+  // ── BOOTSTRAP KATMANI ─────────────────────────────────────────────
+  // Kural tabanlı sinyaller — hem hafıza dolmadan önce hem sonra çalışır.
+  // Pattern motoru aynı outcome için zaten sinyal ürettiyse bootstrap eklenmez.
+  // Eşikler 831 gerçek Nesine maçından ölçülen dağılıma göre kalibre edildi:
+  //   IYMS21 min=15.6 q10=20.5 q25=22.6 q50=26.0 q75=30.5  → eski <=18 hiç tetiklenmiyordu
+  //   IYMS22 min=1.2  q10=2.9  q25=3.5  q50=4.7  q75=6.8   → eski <=8 nadiren tetikleniyordu
+  //   ev/depCum <=−2 sadece %7 maçta oluşuyor               → −0.5 makul hareket eşiği
+  {
     const evCum  = cumCache.ev_ft_cum  || 0;
     const depCum = cumCache.dep_ft_cum || 0;
-    // [FIX-17] Bootstrap mantık düzeltmesi:
-    // 2/1: dep her iki yarı da baskın → depCum düşmeli (dep para giriyor)
-    // X/1: IY dep önde ama FT ev dönüyor → iyms21 düşük + evCum düşüyor
-    // 1/1: ev her iki yarı favori → ms1 düşük + evCum düşüyor
-    // 2/2: dep her iki yarı baskın → iyms22 düşük + depCum düşüyor
-    // Eşikler gevşetildi: 12→18, -4→-2 (daha fazla maç yakalanır)
-    if (raw.iyms21 && raw.iyms21 <= 18 && depCum <= -2)
-      signals.push({ type:'2/1', tier:'STANDART', rule:`[BOOTSTRAP] İYMS21=${raw.iyms21} dep_cum=${depCum}`, prec:5.0, lift:1.5, effectiveLift:1.5, prob:0.15, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.iyms21 && raw.iyms21 <= 18 && evCum <= -2)
-      signals.push({ type:'X/1', tier:'STANDART', rule:`[BOOTSTRAP] İYMS21=${raw.iyms21} ev_cum=${evCum} (IY dep→FT ev dönüşü)`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.ms1 && raw.ms1 <= 1.60 && evCum <= -2)
-      signals.push({ type:'1/1', tier:'STANDART', rule:`[BOOTSTRAP] MS1=${raw.ms1} ev_cum=${evCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.iyms22 && raw.iyms22 <= 8 && depCum <= -2)
-      signals.push({ type:'2/2', tier:'STANDART', rule:`[BOOTSTRAP] İYMS22=${raw.iyms22} dep_cum=${depCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
-    if (raw.iyms12 && raw.iyms12 <= 18 && depCum <= -2)
-      signals.push({ type:'1/2', tier:'STANDART', rule:`[BOOTSTRAP] İYMS12=${raw.iyms12} dep_cum=${depCum}`, prec:5.0, lift:1.4, effectiveLift:1.4, prob:0.14, stateKey, trendStrength:'bootstrap', histCount:0, accLabel:'bootstrap' });
+
+    const bsPush = (type, rule, prec, lift, prob) => {
+      // Aynı outcome pattern motorundan geldiyse bootstrap ekleme
+      if (signals.some(s => s.type === type && s.trendStrength !== 'bootstrap')) return;
+      signals.push({
+        type, tier: 'STANDART', rule: `[BOOTSTRAP] ${rule}`,
+        prec, lift, effectiveLift: lift, prob,
+        stateKey, trendStrength: 'bootstrap',
+        histCount: 0, accLabel: 'bootstrap', accuracy: null, hasHtFt,
+      });
+    };
+
+    // 2/1 → dep IY+FT baskın: IYMS21 düşük oran (<=30, q50 altı) + dep para girişi
+    if (raw.iyms21 && raw.iyms21 <= 30 && depCum <= -0.5)
+      bsPush('2/1', `İYMS21=${raw.iyms21?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.5, 0.15);
+
+    // X/1 → IY dep, FT ev dönüşü: IYMS21 düşük + ev para girişi
+    if (raw.iyms21 && raw.iyms21 <= 30 && evCum <= -0.5)
+      bsPush('X/1', `İYMS21=${raw.iyms21?.toFixed(1)} ev_cum=${evCum.toFixed(2)} (IY dep→FT ev)`, 5.0, 1.4, 0.14);
+
+    // 1/1 → ev her iki yarı baskın: MS1 düşük oran + ev para girişi
+    if (raw.ms1 && raw.ms1 <= 1.60 && evCum <= -0.5)
+      bsPush('1/1', `MS1=${raw.ms1?.toFixed(2)} ev_cum=${evCum.toFixed(2)}`, 5.0, 1.4, 0.14);
+
+    // 2/2 → dep her iki yarı baskın: IYMS22 düşük oran (<=10, q90 altı) + dep para girişi
+    if (raw.iyms22 && raw.iyms22 <= 10 && depCum <= -0.5)
+      bsPush('2/2', `İYMS22=${raw.iyms22?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.4, 0.14);
+
+    // 1/2 → ev IY, dep FT: IYMS12 düşük oran + dep para girişi
+    if (raw.iyms12 && raw.iyms12 <= 30 && depCum <= -0.5)
+      bsPush('1/2', `İYMS12=${raw.iyms12?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.4, 0.14);
+
+    // X/X → her iki yarı berabere: oran hareketi yok + MS berabere düşük
+    if (raw.ms1 && raw.ms1 >= 2.00 && raw.ms2 && raw.ms2 >= 2.00 && Math.abs(evCum) <= 0.2 && Math.abs(depCum) <= 0.2)
+      bsPush('X/X', `MS1=${raw.ms1?.toFixed(2)} MS2=${raw.ms2?.toFixed(2)} hareket=düşük`, 4.5, 1.3, 0.12);
   }
 
   for (const outcome of FOCUS_RESULTS) {
     const p = predictions[outcome];
-    if (p.lift < 1.20) continue;
+    if (p.lift < 1.10) continue;
 
     const { multiplier, label: accLabel, accuracy } = getAccuracyMultiplier(outcome);
     if (multiplier === 0.0) {
@@ -860,7 +886,10 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     if (outcome === '1/1' && raw.ev_ft <= -2 && raw.dep_ft >= 1)  precision += 0.4;
     if (outcome === '2/2' && raw.dep_ft <= -2)                    precision += 0.4;
 
-    const minProb = (p.total >= 10) ? 0.18 : (p.total >= 5) ? 0.22 : 0.28;
+    const minProb = (p.total >= 20) ? 0.18
+                  : (p.total >= 10) ? 0.20
+                  : (p.total >= 5)  ? 0.22
+                  : 0.11; // az örnekte lift>=1.10 yeterliyse geç
     if (p.prob < minProb) continue;
 
     let htFtNote = '';
