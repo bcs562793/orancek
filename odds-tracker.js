@@ -1161,6 +1161,7 @@ async function syncLiveMatches() {
       } else {
         console.warn(`  ⚠️ ${match.name}: skor eksik — sonraki döngüde tekrar denenecek`);
       }
+     }
     }
     match.liveData = { status, htHome, htAway, ftHome, ftAway, htFtResult };
     matchCache.set(fid, match);
