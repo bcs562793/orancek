@@ -1462,7 +1462,6 @@ async function runCycle() {
     const topSignal = signals[0];
     const topLabel  = `${topSignal.type}_${topSignal.tier}`;
     if (alreadyFired(fid, topLabel)) {
-      console.log(`[❌ F3-ZatenAteşlendi] ${fix.home_team} vs ${fix.away_team} | ${topLabel}`);
       continue;
     }
 
