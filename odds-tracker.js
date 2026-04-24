@@ -1153,6 +1153,7 @@ async function syncLiveMatches() {
         ` | HT/FT: ${htFtResult||'hesaplanamadı'}`
       );
       if (htFtResult) {
+        if (!prevLive.htFtResult) {
         resolvePendingSignal(fid, htFtResult);
         resolvedCount++;
         learnFromMatch(fid, htFtResult);
