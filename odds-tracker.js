@@ -1127,7 +1127,7 @@ async function syncLiveMatches() {
     if (!match) continue;
     const prevLive = match.liveData || {};
     // [FIX-A] FT'de ftHome null geldiyse bir sonraki döngüde tekrar dene (retry guard)
-    const ftNeedsRetry = status === 'FT' && prevLive.status === 'FT' && !prevLive.ftHome;
+    const ftNeedsRetry = status === 'FT' && prevLive.status === 'FT' && !prevLive.ftHome == null;
     if (prevLive.status === status && status !== 'FT') continue;
     if (prevLive.status === 'FT' && !ftNeedsRetry) continue;
 
