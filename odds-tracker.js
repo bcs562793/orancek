@@ -119,7 +119,7 @@ function getAccuracyMultiplier(signalType) {
   if (accuracy <= ACCURACY_PENALTY_THR) {
     // Tamamen kapatma yerine %20 ihtimalle keşif yap
     if (Math.random() < EXPLORE_RATE) {
-      console.log(`[AccFilter] ${signalType} KEŞİF modu (%${(accuracy*100).toFixed(0)} doğru)`);
+      
       return { multiplier: 0.6, label: '🔵 keşif', accuracy, isExplore: true };
     }
     return { multiplier: 0.0, label: `🔴 %${(accuracy*100).toFixed(0)} doğru — bastırıldı`, accuracy };
