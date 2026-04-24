@@ -887,7 +887,6 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
 
     const { multiplier, label: accLabel, accuracy } = getAccuracyMultiplier(outcome);
     if (multiplier === 0.0) {
-      console.log(`[AccFilter] ${outcome} bastırıldı (${accLabel})`);
       continue;
     }
 
