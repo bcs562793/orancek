@@ -1249,7 +1249,6 @@ async function runCycle() {
 
     if (h2k > SIGNAL_WINDOW_H) {
       const minLeft = Math.round(h2k * 60);
-      console.log(`[⏳ Bekle] ${fix.home_team} vs ${fix.away_team} | ${minLeft} dk kaldı`);
       continue;
     }
 
