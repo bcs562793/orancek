@@ -279,6 +279,9 @@
     "X/X_STANDART",
     "2/2_STANDART"
   ],
+  "2815997": [
+    "X/X_STANDART"
+  ],
   "2816049": [
     "1/1_STANDART"
   ],
@@ -480,6 +483,9 @@
     "X/X_STANDART",
     "X/2_STANDART"
   ],
+  "2817290": [
+    "X/2_STANDART"
+  ],
   "2817294": [
     "X/1_STANDART"
   ],
@@ -493,7 +499,8 @@
     "2/2_STANDART"
   ],
   "2817370": [
-    "X/X_STANDART"
+    "X/X_STANDART",
+    "X/2_STANDART"
   ],
   "2817398": [
     "2/2_STANDART"
@@ -1062,7 +1069,11 @@
     "X/X_STANDART"
   ],
   "2900280": [
-    "X/X_STANDART"
+    "X/X_STANDART",
+    "2/2_STANDART"
+  ],
+  "2900281": [
+    "2/2_STANDART"
   ],
   "2900282": [
     "2/2_STANDART"
@@ -1073,8 +1084,12 @@
   "2900284": [
     "X/X_STANDART"
   ],
+  "2900285": [
+    "2/2_STANDART"
+  ],
   "2900286": [
-    "X/2_STANDART"
+    "X/2_STANDART",
+    "1/1_STANDART"
   ],
   "2900290": [
     "X/X_STANDART",
@@ -1084,7 +1099,8 @@
     "X/X_STANDART"
   ],
   "2900298": [
-    "X/X_STANDART"
+    "X/X_STANDART",
+    "X/2_STANDART"
   ],
   "2900392": [
     "2/1_STANDART",
