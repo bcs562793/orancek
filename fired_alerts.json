@@ -1521,7 +1521,8 @@
     "X/X_PREMIER"
   ],
   "2900057": [
-    "X/X_ELITE"
+    "X/X_ELITE",
+    "2/1_STANDART"
   ],
   "2900074": [
     "X/X_STANDART"
@@ -1597,7 +1598,8 @@
     "2/1_STANDART"
   ],
   "2900144": [
-    "X/X_ELITE"
+    "X/X_ELITE",
+    "2/1_STANDART"
   ],
   "2900148": [
     "2/2_STANDART",
@@ -1633,19 +1635,24 @@
     "2/1_STANDART"
   ],
   "2900160": [
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "X/X_ELITE"
   ],
   "2900161": [
-    "X/X_ELITE"
+    "X/X_ELITE",
+    "2/1_STANDART"
   ],
   "2900162": [
-    "X/X_PREMIER"
+    "X/X_PREMIER",
+    "2/1_STANDART"
   ],
   "2900164": [
-    "X/X_ELITE"
+    "X/X_ELITE",
+    "2/1_STANDART"
   ],
   "2900165": [
-    "X/X_ELITE"
+    "X/X_ELITE",
+    "2/1_STANDART"
   ],
   "2900166": [
     "2/1_STANDART"
@@ -1972,7 +1979,8 @@
     "2/1_STANDART"
   ],
   "2900406": [
-    "X/X_ELITE"
+    "X/X_ELITE",
+    "2/1_STANDART"
   ],
   "2900407": [
     "2/2_STANDART"
@@ -1981,7 +1989,8 @@
     "2/2_STANDART"
   ],
   "2900409": [
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "X/X_ELITE"
   ],
   "2900412": [
     "X/X_STANDART"
@@ -2027,7 +2036,8 @@
     "X/X_ELITE"
   ],
   "2900600": [
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "X/X_ELITE"
   ],
   "2900607": [
     "2/2_STANDART"
