@@ -853,16 +853,32 @@ function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) 
 
 function generateStateKey(features) {
   const b = features.buckets;
-  const iyms21Key = (b.iyms21_bucket !== 'none') ? `iyms21_${b.iyms21_bucket}` : 'iyms21_na';
-  const iy2Key    = (b.iy2_bucket    !== 'none') ? `iy2_${b.iy2_bucket}`       : 'iy2_na';
-  const au25Key   = (b.au25o_bucket  !== 'none') ? `au25_${b.au25o_bucket}`    : 'au25_na';
+
+  // IY/MS varsa mevcut mantık
+  if (features.hasHtFt) {
+    return [
+      `ms1_${b.ms1_bucket}`,
+      `iy2_${b.iy2_bucket}`,
+      `iyms21_${b.iyms21_bucket}`,
+      `ms2_${b.ms2_bucket}`,
+      `au25_${b.au25o_bucket}`,
+      `iyms22d_${b.iyms22_drop}`,
+    ].join('|');
+  }
+
+  // IY/MS yoksa → ms1/ms2 farkı + over/under + momentum ile ayrıştır
+  const ms1ms2ratio = features.raw.ms1 && features.raw.ms2
+    ? (features.raw.ms1 < features.raw.ms2 ? 'ev_fav'
+      : features.raw.ms1 > features.raw.ms2 * 1.5 ? 'dep_fav' : 'dengeli')
+    : 'unknown';
+
   return [
+    `nohtft`,                          // ← IY/MS yok kovası
     `ms1_${b.ms1_bucket}`,
-    iy2Key,
-    iyms21Key,
     `ms2_${b.ms2_bucket}`,
-    au25Key,
-    `iyms22d_${b.iyms22_drop}`,
+    `au25_${b.au25o_bucket}`,
+    `ratio_${ms1ms2ratio}`,            // ← ev mi favori dep mi
+    `evmom_${b.ev_momentum}`,          // ← para hareketi yönü
   ].join('|');
 }
 
