@@ -1457,16 +1457,12 @@ async function runCycle() {
     if (h2k > SIGNAL_WINDOW_H) continue;
 
     if (signals.length === 0) {
-      console.log(`[❌ F1-SinyalYok] ${fix.home_team} vs ${fix.away_team} | learned=${memory.totalLearned}`);
-      continue;
+        continue;
     }
     const hasHighTier = signals.some(s => s.tier === 'ELITE' || s.tier === 'PREMIER');
     const isBootstrap = signals.every(s => s.trendStrength === 'bootstrap');
     if (!hasHighTier && signals.length < MIN_SIGNALS && !isBootstrap) {
-      console.log(
-        `[❌ F2-TierFiltre] ${fix.home_team} vs ${fix.away_team}` +
-        ` | ${signals.map(s => s.type+'('+s.tier+')').join(', ')}`
-      );
+      
       continue;
     }
 
