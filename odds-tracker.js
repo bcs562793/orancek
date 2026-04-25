@@ -648,11 +648,6 @@ function recordMarketValue(marketKey, value) {
     stat.q50 = sorted[Math.floor(n * 0.50)];
     stat.q75 = sorted[Math.floor(n * 0.75)];
     stat.q90 = sorted[Math.floor(n * 0.90)];
-    console.log(
-      `[Stats] ${marketKey} (${n} gözlem):` +
-      ` q10=${stat.q10} q25=${stat.q25} q50=${stat.q50}` +
-      ` q75=${stat.q75} q90=${stat.q90}`
-    );
   }
 }
 
