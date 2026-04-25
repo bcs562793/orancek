@@ -279,8 +279,14 @@
     "X/X_STANDART",
     "2/2_STANDART"
   ],
+  "2815982": [
+    "X/X_STANDART"
+  ],
   "2815983": [
     "X/2_STANDART"
+  ],
+  "2815994": [
+    "X/X_STANDART"
   ],
   "2815997": [
     "X/X_STANDART"
@@ -293,6 +299,9 @@
     "2/2_STANDART"
   ],
   "2816043": [
+    "X/X_STANDART"
+  ],
+  "2816046": [
     "X/X_STANDART"
   ],
   "2816049": [
@@ -318,6 +327,9 @@
     "X/2_STANDART",
     "2/2_STANDART",
     "1/1_STANDART"
+  ],
+  "2816097": [
+    "X/X_STANDART"
   ],
   "2816105": [
     "X/X_STANDART",
@@ -353,6 +365,9 @@
     "2/2_STANDART",
     "X/X_STANDART"
   ],
+  "2816193": [
+    "X/X_STANDART"
+  ],
   "2816196": [
     "2/2_STANDART"
   ],
@@ -372,6 +387,9 @@
     "1/1_STANDART"
   ],
   "2816264": [
+    "X/X_STANDART"
+  ],
+  "2816273": [
     "X/X_STANDART"
   ],
   "2816290": [
@@ -564,6 +582,9 @@
     "X/X_STANDART",
     "X/2_STANDART"
   ],
+  "2816794": [
+    "X/X_STANDART"
+  ],
   "2816797": [
     "X/X_STANDART",
     "X/2_STANDART"
@@ -594,6 +615,9 @@
   ],
   "2816867": [
     "1/1_STANDART"
+  ],
+  "2816873": [
+    "2/2_STANDART"
   ],
   "2816895": [
     "2/2_STANDART",
@@ -662,6 +686,9 @@
   ],
   "2817063": [
     "2/2_STANDART"
+  ],
+  "2817078": [
+    "X/X_STANDART"
   ],
   "2817079": [
     "X/X_PREMIER"
@@ -767,6 +794,9 @@
   "2817398": [
     "2/2_STANDART"
   ],
+  "2817402": [
+    "X/X_STANDART"
+  ],
   "2817406": [
     "2/2_STANDART",
     "X/X_STANDART"
@@ -843,6 +873,9 @@
   "2817549": [
     "X/2_STANDART"
   ],
+  "2817555": [
+    "X/X_STANDART"
+  ],
   "2817568": [
     "X/X_STANDART",
     "X/2_STANDART"
@@ -856,6 +889,9 @@
   "2817629": [
     "2/1_STANDART",
     "X/X_PREMIER"
+  ],
+  "2817631": [
+    "X/X_STANDART"
   ],
   "2817669": [
     "2/1_STANDART"
@@ -990,6 +1026,9 @@
   "2818053": [
     "1/1_STANDART"
   ],
+  "2818069": [
+    "X/X_STANDART"
+  ],
   "2818072": [
     "X/2_STANDART",
     "X/X_STANDART"
@@ -1019,6 +1058,9 @@
     "2/2_STANDART"
   ],
   "2820415": [
+    "X/X_STANDART"
+  ],
+  "2820473": [
     "X/X_STANDART"
   ],
   "2820500": [
@@ -1162,6 +1204,9 @@
     "X/X_PREMIER",
     "2/1_STANDART"
   ],
+  "2833177": [
+    "2/1_STANDART"
+  ],
   "2833192": [
     "1/1_STANDART"
   ],
@@ -1225,6 +1270,9 @@
     "X/2_STANDART",
     "1/1_STANDART"
   ],
+  "2855915": [
+    "X/X_STANDART"
+  ],
   "2855926": [
     "X/2_STANDART"
   ],
@@ -1259,6 +1307,9 @@
     "2/2_STANDART",
     "X/X_STANDART",
     "1/1_STANDART"
+  ],
+  "2879459": [
+    "X/X_STANDART"
   ],
   "2879472": [
     "X/2_STANDART",
@@ -1469,6 +1520,9 @@
     "X/1_STANDART",
     "X/X_PREMIER"
   ],
+  "2900057": [
+    "X/X_ELITE"
+  ],
   "2900074": [
     "X/X_STANDART"
   ],
@@ -1506,6 +1560,12 @@
     "X/X_STANDART",
     "X/2_STANDART"
   ],
+  "2900107": [
+    "X/X_STANDART"
+  ],
+  "2900110": [
+    "X/X_STANDART"
+  ],
   "2900112": [
     "X/X_STANDART",
     "1/1_STANDART"
@@ -1533,6 +1593,12 @@
     "2/1_STANDART",
     "X/X_ELITE"
   ],
+  "2900143": [
+    "2/1_STANDART"
+  ],
+  "2900144": [
+    "X/X_ELITE"
+  ],
   "2900148": [
     "2/2_STANDART",
     "2/1_STANDART"
@@ -1544,6 +1610,21 @@
     "2/2_STANDART",
     "1/1_PREMIER"
   ],
+  "2900151": [
+    "2/1_STANDART"
+  ],
+  "2900152": [
+    "1/1_PREMIER"
+  ],
+  "2900154": [
+    "2/2_STANDART"
+  ],
+  "2900155": [
+    "2/1_STANDART"
+  ],
+  "2900156": [
+    "2/1_STANDART"
+  ],
   "2900158": [
     "2/2_STANDART",
     "1/1_PREMIER"
@@ -1551,11 +1632,56 @@
   "2900159": [
     "2/1_STANDART"
   ],
+  "2900160": [
+    "2/1_STANDART"
+  ],
+  "2900161": [
+    "X/X_ELITE"
+  ],
+  "2900162": [
+    "X/X_PREMIER"
+  ],
+  "2900164": [
+    "X/X_ELITE"
+  ],
+  "2900165": [
+    "X/X_ELITE"
+  ],
+  "2900166": [
+    "2/1_STANDART"
+  ],
+  "2900169": [
+    "2/1_STANDART"
+  ],
   "2900171": [
     "2/1_STANDART"
   ],
   "2900172": [
     "2/1_STANDART"
+  ],
+  "2900173": [
+    "2/2_STANDART"
+  ],
+  "2900174": [
+    "2/1_STANDART"
+  ],
+  "2900175": [
+    "2/1_STANDART"
+  ],
+  "2900176": [
+    "2/1_STANDART"
+  ],
+  "2900177": [
+    "1/1_PREMIER"
+  ],
+  "2900178": [
+    "2/1_STANDART"
+  ],
+  "2900179": [
+    "2/2_STANDART"
+  ],
+  "2900180": [
+    "2/2_STANDART"
   ],
   "2900182": [
     "X/X_ELITE",
@@ -1602,6 +1728,9 @@
   ],
   "2900201": [
     "2/2_STANDART"
+  ],
+  "2900203": [
+    "2/1_STANDART"
   ],
   "2900205": [
     "2/2_STANDART",
@@ -1816,6 +1945,9 @@
     "X/X_STANDART",
     "X/2_STANDART"
   ],
+  "2900368": [
+    "2/2_STANDART"
+  ],
   "2900383": [
     "2/1_STANDART",
     "X/X_PREMIER"
@@ -1838,6 +1970,21 @@
   ],
   "2900405": [
     "2/1_STANDART"
+  ],
+  "2900406": [
+    "X/X_ELITE"
+  ],
+  "2900407": [
+    "2/2_STANDART"
+  ],
+  "2900408": [
+    "2/2_STANDART"
+  ],
+  "2900409": [
+    "2/1_STANDART"
+  ],
+  "2900412": [
+    "X/X_STANDART"
   ],
   "2900434": [
     "X/X_STANDART"
@@ -1878,6 +2025,9 @@
   "2900599": [
     "2/1_STANDART",
     "X/X_ELITE"
+  ],
+  "2900600": [
+    "2/1_STANDART"
   ],
   "2900607": [
     "2/2_STANDART"
