@@ -1650,7 +1650,8 @@
   ],
   "2900161": [
     "X/X_ELITE",
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "2/2_STANDART"
   ],
   "2900162": [
     "X/X_PREMIER",
@@ -1695,7 +1696,8 @@
     "1/1_PREMIER"
   ],
   "2900178": [
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "X/X_ELITE"
   ],
   "2900179": [
     "2/2_STANDART"
