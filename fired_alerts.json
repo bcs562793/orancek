@@ -395,7 +395,8 @@
     "X/2_STANDART"
   ],
   "2816659": [
-    "X/2_STANDART"
+    "X/2_STANDART",
+    "X/X_STANDART"
   ],
   "2816691": [
     "1/1_STANDART"
@@ -1050,7 +1051,8 @@
     "X/X_STANDART"
   ],
   "2900273": [
-    "X/2_STANDART"
+    "X/2_STANDART",
+    "X/X_STANDART"
   ],
   "2900278": [
     "X/X_STANDART",
@@ -1071,8 +1073,12 @@
   "2900284": [
     "X/X_STANDART"
   ],
+  "2900286": [
+    "X/2_STANDART"
+  ],
   "2900290": [
-    "X/X_STANDART"
+    "X/X_STANDART",
+    "1/1_STANDART"
   ],
   "2900293": [
     "X/X_STANDART"
