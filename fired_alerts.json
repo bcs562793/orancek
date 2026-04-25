@@ -335,6 +335,9 @@
     "X/X_STANDART",
     "2/2_STANDART"
   ],
+  "2816109": [
+    "X/X_STANDART"
+  ],
   "2816126": [
     "2/2_STANDART"
   ],
@@ -1674,7 +1677,8 @@
   ],
   "2900165": [
     "X/X_ELITE",
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "X/X_PREMIER"
   ],
   "2900166": [
     "2/1_STANDART"
