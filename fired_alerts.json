@@ -916,7 +916,8 @@
     "X/2_STANDART"
   ],
   "2817450": [
-    "2/2_STANDART"
+    "2/2_STANDART",
+    "2/X_STANDART"
   ],
   "2817453": [
     "1/1_STANDART",
@@ -1710,6 +1711,9 @@
   "2842655": [
     "2/1_STANDART",
     "X/2_STANDART"
+  ],
+  "2842735": [
+    "OU25_OVER_STANDART"
   ],
   "2842927": [
     "1/1_STANDART"
@@ -2819,7 +2823,8 @@
     "2/1_STANDART"
   ],
   "2900578": [
-    "X/1_STANDART"
+    "X/1_STANDART",
+    "2/1_STANDART"
   ],
   "2900579": [
     "2/1_STANDART"
