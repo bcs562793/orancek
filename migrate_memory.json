@@ -1,0 +1,161 @@
+'use strict';
+/**
+ * migrate_memory.js — ScorePop Memory Migration Tool
+ * Eski 10/14-parça stateKey'leri v3.6-fixed 6/7-parça formatına çevirir.
+ * Hiçbir öğrenme kaybedilmez.
+ *
+ * Kullanım:
+ *   node migrate_memory.js [input] [output]
+ *   node migrate_memory.js learned_memory.json learned_memory.json
+ */
+
+const fs = require('fs');
+
+const INPUT  = process.argv[2] || 'learned_memory.json';
+const OUTPUT = process.argv[3] || 'learned_memory.json';
+
+function detectFormat(key) {
+  const parts = key.split('|');
+  if (key.startsWith('nohtft') && parts.length === 7) return 'v36_nohtft';
+  if (parts.length === 6 && key.includes('iyms22d'))   return 'v36_htft';
+  if (parts.length === 10 && parts[2].startsWith('evft')) return 'old_10';
+  if (parts.length === 14 && parts[10].startsWith('ms1d')) return 'old_14';
+  return 'unknown';
+}
+
+function parseOldKey(key, format) {
+  const parts = key.split('|');
+  return {
+    ms1:     parts[0],
+    iy2:     parts[1],
+    iyms21:  parts[4],
+    ms2:     parts[8],
+    au25:    parts[9],
+    iyms22d: format === 'old_14' ? parts[12] : 'iyms22d_flat',
+  };
+}
+
+function toNewKey(info) {
+  const iyms21val = info.iyms21.replace('iyms21_', '');
+  if (iyms21val === 'na' || iyms21val === 'none' || iyms21val === 'unknown') {
+    const ms1  = info.ms1.replace('ms1_', '');
+    const ms2  = info.ms2.replace('ms2_', '');
+    const au25 = info.au25.replace('au25_', '');
+    return `nohtft|ms1_${ms1}|ms2_${ms2}|au25_${au25}|btts_none|ratio_unknown|iy1_none`;
+  }
+  const iyms22d = info.iyms22d.replace('iyms22d_', '');
+  return `${info.ms1}|${info.iy2}|${info.iyms21}|${info.ms2}|${info.au25}|iyms22d_${iyms22d}`;
+}
+
+function mergePatterns(target, source) {
+  for (const [outcome, data] of Object.entries(source)) {
+    if (!target[outcome]) target[outcome] = { count: 0, firstSeen: data.firstSeen };
+    target[outcome].count += (data.count || 0);
+    if (data.firstSeen < target[outcome].firstSeen) target[outcome].firstSeen = data.firstSeen;
+  }
+}
+
+function migratePendingSignals(pendingSignals) {
+  const migrated = {};
+  let count = 0;
+  for (const [fid, pending] of Object.entries(pendingSignals)) {
+    const sk  = pending.stateKey || '';
+    const fmt = detectFormat(sk);
+    if (fmt === 'v36_htft' || fmt === 'v36_nohtft') {
+      migrated[fid] = pending;
+    } else if (fmt === 'old_10' || fmt === 'old_14') {
+      const info   = parseOldKey(sk, fmt);
+      const newKey = toNewKey(info);
+      migrated[fid] = { ...pending, stateKey: newKey };
+      count++;
+    }
+  }
+  return { migrated, count };
+}
+
+console.log('╔══════════════════════════════════════════════════════════╗');
+console.log('║  ScorePop Memory Migration Tool                          ║');
+console.log('╚══════════════════════════════════════════════════════════╝');
+console.log(`\n📂 Input : ${INPUT}`);
+console.log(`📂 Output: ${OUTPUT}\n`);
+
+if (!fs.existsSync(INPUT)) {
+  console.error(`❌ Dosya bulunamadı: ${INPUT}`);
+  process.exit(1);
+}
+
+const backupFile = INPUT.replace('.json', `_backup_${Date.now()}.json`);
+fs.copyFileSync(INPUT, backupFile);
+console.log(`✅ Yedek alındı: ${backupFile}\n`);
+
+const mem = JSON.parse(fs.readFileSync(INPUT, 'utf8'));
+
+const newPatterns = {};
+let stats = { already_v36: 0, migrated_10: 0, migrated_14: 0, unknown: 0, merged: 0 };
+
+for (const [oldKey, outcomes] of Object.entries(mem.patterns || {})) {
+  const fmt = detectFormat(oldKey);
+  if (fmt === 'v36_htft' || fmt === 'v36_nohtft') {
+    if (!newPatterns[oldKey]) newPatterns[oldKey] = {};
+    mergePatterns(newPatterns[oldKey], outcomes);
+    stats.already_v36++;
+    continue;
+  }
+  if (fmt === 'old_10' || fmt === 'old_14') {
+    const info   = parseOldKey(oldKey, fmt);
+    const newKey = toNewKey(info);
+    if (!newPatterns[newKey]) newPatterns[newKey] = {};
+    const existed = Object.keys(newPatterns[newKey]).length > 0;
+    mergePatterns(newPatterns[newKey], outcomes);
+    if (existed) stats.merged++;
+    if (fmt === 'old_10') stats.migrated_10++;
+    else                  stats.migrated_14++;
+    continue;
+  }
+  stats.unknown++;
+  console.log(`  ⚠️  Tanınmayan format, atlandı: ${oldKey.substring(0, 70)}`);
+}
+
+let accReset = 0;
+for (const acc of Object.values(mem.signalAccuracy || {})) {
+  if ((acc.recent || []).length > 0) { acc.recent = []; accReset++; }
+}
+
+const { migrated: newPending, count: pendingMigrated } = migratePendingSignals(mem.pendingSignals || {});
+
+const newMem = {
+  ...mem,
+  patterns:       newPatterns,
+  pendingSignals: newPending,
+  signalAccuracy: mem.signalAccuracy,
+  version:        4,
+  migratedAt:     new Date().toISOString(),
+};
+
+fs.writeFileSync(OUTPUT, JSON.stringify(newMem, null, 2));
+
+const oldCount = Object.keys(mem.patterns || {}).length;
+const newCount = Object.keys(newPatterns).length;
+const totalOld = Object.values(mem.patterns || {}).reduce((s, p) =>
+  s + Object.values(p).reduce((ss, v) => ss + (v.count || 0), 0), 0);
+const totalNew = Object.values(newPatterns).reduce((s, p) =>
+  s + Object.values(p).reduce((ss, v) => ss + (v.count || 0), 0), 0);
+
+console.log('─'.repeat(55));
+console.log('  📊 MİGRASYON RAPORU');
+console.log('─'.repeat(55));
+console.log(`  Eski pattern sayısı     : ${oldCount}`);
+console.log(`  Yeni pattern sayısı     : ${newCount}`);
+console.log(`  Zaten doğru (v3.6)      : ${stats.already_v36}`);
+console.log(`  10-parça dönüştürüldü   : ${stats.migrated_10}`);
+console.log(`  14-parça dönüştürüldü   : ${stats.migrated_14}`);
+console.log(`  Merge (çakışan key)     : ${stats.merged}`);
+console.log(`  Tanınmayan (atlandı)    : ${stats.unknown}`);
+console.log('─'.repeat(55));
+console.log(`  Toplam öğrenme (eski)   : ${totalOld}`);
+console.log(`  Toplam öğrenme (yeni)   : ${totalNew}  ← korundu!`);
+console.log(`  signalAccuracy recent[] : ${accReset} tip sıfırlandı`);
+console.log(`  pendingSignals          : ${pendingMigrated} sinyal migrate edildi`);
+console.log('─'.repeat(55));
+console.log(`\n✅ Tamamlandı → ${OUTPUT}`);
+console.log(`📦 Yedek     → ${backupFile}\n`);
