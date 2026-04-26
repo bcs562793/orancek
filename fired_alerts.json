@@ -2170,6 +2170,9 @@
   "2900062": [
     "2/2_STANDART"
   ],
+  "2900063": [
+    "X/1_STANDART"
+  ],
   "2900064": [
     "1/X_PREMIER",
     "2/2_STANDART",
@@ -2797,7 +2800,8 @@
     "2/1_STANDART"
   ],
   "2900374": [
-    "2/X_STANDART"
+    "2/X_STANDART",
+    "2/1_STANDART"
   ],
   "2900375": [
     "2/1_STANDART",
