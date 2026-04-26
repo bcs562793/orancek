@@ -1699,6 +1699,9 @@
   "2830591": [
     "X/X_STANDART"
   ],
+  "2830599": [
+    "OU25_OVER_STANDART"
+  ],
   "2830623": [
     "X/X_STANDART",
     "X/2_STANDART"
@@ -2792,6 +2795,9 @@
   ],
   "2900373": [
     "2/1_STANDART"
+  ],
+  "2900374": [
+    "2/X_STANDART"
   ],
   "2900375": [
     "2/1_STANDART",
