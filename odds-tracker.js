@@ -78,7 +78,7 @@ const FOCUS_RESULTS = ['1/1', '2/1', '1/X', '2/X', 'X/X', 'X/2', 'X/1', '2/2', '
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 0 — DOĞRULUK MOTORU
 // ════════════════════════════════════════════════════════════════════
-const EXPLORE_RATE = 0.20;
+const EXPLORE_RATE = 0.0;
 
 function resolvePendingSignal(fid, actualResult) {
   const pending = memory.pendingSignals[fid];
@@ -87,7 +87,24 @@ function resolvePendingSignal(fid, actualResult) {
   if (!memory.signalAccuracy[topSignal])
     memory.signalAccuracy[topSignal] = { fired: 0, correct: 0, recent: [] };
   const acc = memory.signalAccuracy[topSignal];
-  const isCorrect = topSignal === actualResult;
+
+  // MS_ sinyalleri için: 'MS_1' === actualResult'ın FT yarısı
+  let isCorrect;
+  if (topSignal.startsWith('MS_')) {
+    const msPart = topSignal.split('_')[1]; // 'MS_1' → '1'
+    const actualMs = actualResult.split('/')[1]; // '1/1' → '1', 'X/2' → '2'
+    isCorrect = msPart === actualMs;
+  } else if (topSignal === 'OU25_OVER' || topSignal === 'OU35_OVER') {
+    // OU sinyalleri için doğruluk şimdilik loglanmıyor (gol sayısı bilgisi yok)
+    isCorrect = null; // bilinmiyor
+  } else {
+    isCorrect = topSignal === actualResult;
+  }
+  if (isCorrect === null) {
+    delete memory.pendingSignals[fid];
+    return; // OU doğruluğu sonradan eklenecek
+  }
+
   if (isCorrect) acc.correct++;
 
   if (!acc.recent) acc.recent = [];
@@ -186,24 +203,32 @@ function calcTrajectory(v0, v45, v15) {
 // ── [NEW-1] Snapshot'tan zaman noktası bul ──────────────────────
 function getSnapshotNearMinutes(snapshots, kickoff, minutesBefore) {
   if (!kickoff || !snapshots || !snapshots.length) return null;
-  const targetMs = new Date(kickoff).getTime() - minutesBefore * 60000;
+  // hoursToKickoff ile aynı timezone mantığı
+  const hasTimezone = /Z|[+-]\d{2}:?\d{2}$/.test(String(kickoff));
+  const kickoffMs = hasTimezone
+    ? new Date(kickoff).getTime()
+    : new Date(kickoff).getTime() - 3 * 3600000; // UTC+3 varsayım
+  const targetMs = kickoffMs - minutesBefore * 60000;
   let best = null, bestDiff = Infinity;
   for (const s of snapshots) {
     const diff = Math.abs(new Date(s.time).getTime() - targetMs);
     if (diff < bestDiff) { bestDiff = diff; best = s; }
   }
-  return best;
+  // Eşleşme çok uzaksa (>30dk) null dön — yanlış snapshot kullanma
+  return bestDiff < 30 * 60000 ? best : null;
 }
 
 // ── [NEW-1] Fingerprint oluştur ──────────────────────────────────
-function buildFingerprint(snapshots, kickoff, openingMarkets) {
-  const tLast = snapshots && snapshots.length ? snapshots[snapshots.length - 1] : null;
+function buildFingerprint(snapshots, kickoff, openingMarkets, closingMarkets) {
+  const tLast   = snapshots && snapshots.length ? snapshots[snapshots.length - 1] : null;
   const t45snap = getSnapshotNearMinutes(snapshots, kickoff, 45);
   const t15snap = getSnapshotNearMinutes(snapshots, kickoff, 15);
 
-  const t0  = openingMarkets          || {};
-  const t45 = (t45snap || tLast)?.markets || {};
-  const t15 = (t15snap || tLast)?.markets || {};
+  const t0    = openingMarkets              || {};           // İlk görülen — açılış
+  const tClose = closingMarkets             || tLast?.markets || {}; // Son görülen — kapanış
+  // T45 ve T15: snapshot bulunursa kullan, bulunamazsa kapanış oranını kullan
+  const t45   = t45snap?.markets            || tClose;
+  const t15   = t15snap?.markets            || tClose;
 
   const getVal = (m, k, s) => m[k]?.[s] ?? null;
 
@@ -442,12 +467,14 @@ function loadCache() {
     }
   }
 
-  // [FIX-C] Eski format pendingSignals temizle
+  // [FIX-C] Eski format pendingSignals temizle (nohtft format korunur)
   let stalePending = 0;
   for (const [fid, p] of Object.entries(memory.pendingSignals)) {
     const sk = p.stateKey || '';
     const parts = sk.split('|');
-    if (parts.length !== 6 || !sk.includes('iyms22d')) {
+    const isHtFtFormat  = parts.length === 6 && sk.includes('iyms22d');
+    const isNoHtFtFormat = parts.length === 6 && sk.startsWith('nohtft');
+    if (!isHtFtFormat && !isNoHtFtFormat) {
       delete memory.pendingSignals[fid];
       stalePending++;
     }
@@ -885,6 +912,12 @@ function learnFromMatch(fixtureId, actualHtFt) {
   if (!match || !match.snapshots || match.snapshots.length === 0) return;
   if (!FOCUS_RESULTS.includes(actualHtFt)) return;
 
+  // [FIX-DUP] Aynı maçı birden fazla kez öğrenme — duplicate önleme
+  if (match.learned) {
+    console.log(`[Learn] fixture=${fixtureId} zaten öğrenildi, atlandı.`);
+    return;
+  }
+
   const pending = memory.pendingSignals[fixtureId];
   let key;
   if (pending?.stateKey) {
@@ -899,10 +932,12 @@ function learnFromMatch(fixtureId, actualHtFt) {
     key = lastSnap._stateKey;
   }
 
-  // [FIX-D] Eski format stateKey'leri atla
+  // [FIX-D v2] Eski format stateKey'leri atla, yeni nohtft formatını kabul et
   const keyParts = key.split('|');
-  if (keyParts.length !== 6 || !key.includes('iyms22d')) {
-    console.warn(`[Learn] fixture=${fixtureId} eski format stateKey → atlandı`);
+  const isHtFtKey   = keyParts.length === 6 && key.includes('iyms22d');
+  const isNoHtFtKey = keyParts.length === 6 && key.startsWith('nohtft');
+  if (!isHtFtKey && !isNoHtFtKey) {
+    console.warn(`[Learn] fixture=${fixtureId} tanınmayan stateKey formatı → atlandı: ${key}`);
     return;
   }
 
@@ -911,7 +946,20 @@ function learnFromMatch(fixtureId, actualHtFt) {
     memory.patterns[key][actualHtFt] = { count: 0, firstSeen: new Date().toISOString() };
   memory.patterns[key][actualHtFt].count++;
   memory.totalLearned++;
+  match.learned = true; // [FIX-DUP] Bir daha öğrenilmesin
+  matchCache.set(fixtureId, match); // learned flag'ini cache'e yaz
   console.log(`[Learn] "${key}" → ${actualHtFt} (sayı: ${memory.patterns[key][actualHtFt].count})`);
+
+  // [nohtft-MS] IY/MS yoksa ayrıca MS sonucunu ('1'/'X'/'2') öğren
+  if (isNoHtFtKey) {
+    const msResult = actualHtFt.split('/')[1]; // '1/1'→'1', 'X/2'→'2', '2/X'→'X'
+    const msKey = key + '|MS_RESULT';
+    if (!memory.patterns[msKey]) memory.patterns[msKey] = {};
+    if (!memory.patterns[msKey][msResult])
+      memory.patterns[msKey][msResult] = { count: 0, firstSeen: new Date().toISOString() };
+    memory.patterns[msKey][msResult].count++;
+    console.log(`[Learn-MS] "${msKey}" → ${msResult}`);
+  }
 
   // [NEW-4] Match history'ye kaydet — benzer maç araması için
   recordMatchHistory(
@@ -1128,10 +1176,74 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     });
   }
 
-  const tierW = { ELITE: 3, PREMIER: 2, STANDART: 1 };
-  signals.sort((a,c) => (tierW[c.tier]||0)-(tierW[a.tier]||0) || c.effectiveLift-a.effectiveLift);
+  // [nohtft-FILTER] IY/MS oranı yoksa IY/MS tipi sinyalleri çıkar
+  // Sadece MS ('1','X','2') veya ou tipi sinyal üret
+  // (Bu aşamada sinyal type'ları IY/MS formatında, MS'e dönüştür)
+  let finalSignals = signals;
+  if (!hasHtFt) {
+    // IY/MS sinyallerini filtrele, MS'e aggregate et
+    const msProbs = { '1': 0, 'X': 0, '2': 0 };
+    const msCounts = { '1': 0, 'X': 0, '2': 0 };
+    for (const s of signals) {
+      // '1/1','1/X','1/2' → MS '1' | 'X/1','X/X','X/2' → MS 'X' | '2/1','2/X','2/2' → MS '2'
+      const msPart = s.type.split('/')[0];
+      if (msProbs[msPart] !== undefined) {
+        msProbs[msPart]  += s.prob;
+        msCounts[msPart] += s.histCount || 0;
+      }
+    }
+    const msSignals = [];
+    for (const [ms, prob] of Object.entries(msProbs)) {
+      if (prob < 0.15) continue;
+      const lift = prob / (1/3); // MS için baz oran 1/3
+      if (lift < 1.10) continue;
+      const { multiplier, label: accLabel, accuracy } = getAccuracyMultiplier('MS_' + ms);
+      if (multiplier === 0.0) continue;
+      msSignals.push({
+        type: 'MS_' + ms,          // 'MS_1', 'MS_X', 'MS_2'
+        tier: lift >= 1.5 ? 'PREMIER' : 'STANDART',
+        rule: `[nohtft-MS] Agregat prob=${prob.toFixed(2)} | stateKey=${stateKey.substring(0,40)}`,
+        prec: +(prob * 10).toFixed(2),
+        lift: +lift.toFixed(2),
+        effectiveLift: +(lift * multiplier).toFixed(2),
+        prob: +prob.toFixed(3),
+        stateKey, trendStrength,
+        histCount: msCounts[ms], accLabel, accuracy,
+        hasHtFt: false,
+        trapRisk: 0, similarCount: similarMatches.length,
+        decisiveMarket: null,
+      });
+    }
+    // Bootstrap OU sinyalleri: ou25/ou35 oranına göre
+    const ou25o = features.raw.au25o;
+    const ou35  = markets?.['ou35']?.over ?? null;
+    if (ou25o && ou25o < 1.65) {
+      msSignals.push({
+        type: 'OU25_OVER', tier: 'STANDART',
+        rule: `[nohtft-OU25] ou25.over=${ou25o?.toFixed(2)} (düşük oran=favori)`,
+        prec: 6.0, lift: 1.4, effectiveLift: 1.4, prob: 0.60,
+        stateKey, trendStrength: 'bootstrap',
+        histCount: 0, accLabel: 'bootstrap', accuracy: null,
+        hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
+      });
+    }
+    if (ou35 && ou35 < 1.65) {
+      msSignals.push({
+        type: 'OU35_OVER', tier: 'STANDART',
+        rule: `[nohtft-OU35] ou35.over=${ou35?.toFixed(2)} (düşük oran=favori)`,
+        prec: 6.0, lift: 1.4, effectiveLift: 1.4, prob: 0.60,
+        stateKey, trendStrength: 'bootstrap',
+        histCount: 0, accLabel: 'bootstrap', accuracy: null,
+        hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
+      });
+    }
+    finalSignals = msSignals;
+  }
 
-  return { signals, features, predictions, stateKey, hasHtFt, similarMatches };
+  const tierW = { ELITE: 3, PREMIER: 2, STANDART: 1 };
+  finalSignals.sort((a,c) => (tierW[c.tier]||0)-(tierW[a.tier]||0) || c.effectiveLift-a.effectiveLift);
+
+  return { signals: finalSignals, features, predictions, stateKey, hasHtFt, similarMatches };
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1436,8 +1548,13 @@ async function runCycle() {
     snapshots.push({ time: new Date().toISOString(), markets: currMarkets, changes, ev_ft, dep_ft });
     if (snapshots.length > 10) snapshots.shift();
 
-    // [NEW-1] Fingerprint hesapla — T0/T45/T15 trajectory
-    const fingerprint = buildFingerprint(snapshots, fix.kickoff, prev?.openingMarkets || currMarkets);
+    // [NEW-1] Fingerprint hesapla — T0/T45/T15 + kapanış trajectory
+    const fingerprint = buildFingerprint(
+      snapshots,
+      fix.kickoff,
+      prev?.openingMarkets || currMarkets,   // T0 = açılış
+      prev?.closingMarkets || currMarkets,   // T_close = önceki döngünün son oranı
+    );
 
     const { signals, features, predictions, stateKey, hasHtFt, similarMatches } = evaluateSmartSignals(
       currMarkets, changes, { ev_ft_cum, dep_ft_cum }, snapshots,
@@ -1449,9 +1566,11 @@ async function runCycle() {
       name: `${fix.home_team} vs ${fix.away_team}`,
       kickoff: fix.kickoff, latestMarkets: currMarkets,
       ev_ft_cum, dep_ft_cum, snapshots,
-      liveData:       prev?.liveData       || {},
-      openingMarkets: prev?.openingMarkets || currMarkets,
-      fingerprint,  // [NEW-1] matchCache'e kaydedildi
+      liveData:        prev?.liveData        || {},
+      openingMarkets:  prev?.openingMarkets  || currMarkets,  // T0 — ilk görülen oran
+      closingMarkets:  currMarkets,                           // T_close — her döngüde güncellenir, son=kapanış
+      learned:         prev?.learned         || false,        // duplicate önleme flag'i
+      fingerprint,
     });
 
     if (h2k > SIGNAL_WINDOW_H) continue;
@@ -1508,17 +1627,20 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v3.5 — Fingerprint + Trap Engine      ║');
+  console.log('║  ScorePop Adaptive v3.6 — nohtft + Trajectory Fix        ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
   console.log(`║  Bootstrap eşiği   : ${String(BOOTSTRAP_THRESHOLD).padEnd(36)}║`);
   console.log(`║  Sinyal penceresi  : ≤${String(Math.round(SIGNAL_WINDOW_H*60)+'dk').padEnd(35)}║`);
   console.log(`║  Accuracy min örnek: ${String(ACCURACY_MIN_SAMPLES).padEnd(36)}║`);
   console.log(`║  Maç geçmişi maks  : ${String(MAX_MATCH_HISTORY).padEnd(36)}║`);
-  console.log(`║  v3.5 NEW-1: T0/T45/T15 Fingerprint sistemi             ║`);
-  console.log(`║  v3.5 NEW-2: Trajectory hesabı (falling/rising/trap)    ║`);
-  console.log(`║  v3.5 NEW-3: Tuzak (trap) tespiti ve hafızası           ║`);
-  console.log(`║  v3.5 NEW-4: Cosine similarity ile benzer maç arama     ║`);
-  console.log(`║  v3.5 NEW-5: Belirleyici market analizi                 ║`);
+  console.log(`║  v3.6 DEĞ-1: EXPLORE_RATE=0.0 (keşif kapatıldı)        ║`);
+  console.log(`║  v3.6 DEĞ-2: FIX-C nohtft pendingSignal koruması        ║`);
+  console.log(`║  v3.6 DEĞ-3: FIX-D nohtft stateKey + duplicate guard    ║`);
+  console.log(`║  v3.6 DEĞ-4: closingMarkets + learned flag               ║`);
+  console.log(`║  v3.6 DEĞ-5: Trajectory timezone fix + kapanış bazlı    ║`);
+  console.log(`║  v3.6 DEĞ-6: buildFingerprint closingMarkets çağrısı    ║`);
+  console.log(`║  v3.6 DEĞ-7: nohtft → MS_/OU_ sinyal filtresi           ║`);
+  console.log(`║  v3.6 DEĞ-8: resolvePendingSignal MS_ tip desteği       ║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
