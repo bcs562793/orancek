@@ -2193,6 +2193,9 @@
   "2900066": [
     "1/1_STANDART"
   ],
+  "2900067": [
+    "X/1_STANDART"
+  ],
   "2900069": [
     "X/1_STANDART",
     "2/1_STANDART"
@@ -2510,7 +2513,8 @@
     "1/1_ELITE"
   ],
   "2900211": [
-    "2/1_STANDART"
+    "2/1_STANDART",
+    "1/1_STANDART"
   ],
   "2900212": [
     "2/1_STANDART",
