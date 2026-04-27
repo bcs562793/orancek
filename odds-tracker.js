@@ -990,7 +990,7 @@ function generateStateKey(features) {
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 7 — ÖĞRENME MOTORU
 // ════════════════════════════════════════════════════════════════════
-function learnFromMatch(fixtureId, actualHtFt) {
+function learnFromMatch(fixtureId, actualHtFt, scoreData = null) {
   const match = matchCache.get(fixtureId);
   if (!match || !match.snapshots || match.snapshots.length === 0) return;
   if (!FOCUS_RESULTS.includes(actualHtFt)) return;
@@ -1040,6 +1040,27 @@ function learnFromMatch(fixtureId, actualHtFt) {
       memory.patterns[msKey][msResult] = { count: 0, firstSeen: new Date().toISOString() };
     memory.patterns[msKey][msResult].count++;
     console.log(`[Learn-MS] "${msKey}" → ${msResult}`);
+  }
+
+  // [FIX-P3-1] nohtft maçlarda OU sonucunu da öğren
+  if (isNoHtFtKey && scoreData?.ftHome != null && scoreData?.ftAway != null) {
+    const totalGoals = scoreData.ftHome + scoreData.ftAway;
+
+    const ou25Result = totalGoals > 2.5 ? 'OVER25' : 'UNDER25';
+    const ou25Key    = key + '|OU25_RESULT';
+    if (!memory.patterns[ou25Key]) memory.patterns[ou25Key] = {};
+    if (!memory.patterns[ou25Key][ou25Result])
+      memory.patterns[ou25Key][ou25Result] = { count: 0, firstSeen: new Date().toISOString() };
+    memory.patterns[ou25Key][ou25Result].count++;
+    console.log(`[Learn-OU25] "${ou25Key}" → ${ou25Result} (${totalGoals} gol)`);
+
+    const ou35Result = totalGoals > 3.5 ? 'OVER35' : 'UNDER35';
+    const ou35Key    = key + '|OU35_RESULT';
+    if (!memory.patterns[ou35Key]) memory.patterns[ou35Key] = {};
+    if (!memory.patterns[ou35Key][ou35Result])
+      memory.patterns[ou35Key][ou35Result] = { count: 0, firstSeen: new Date().toISOString() };
+    memory.patterns[ou35Key][ou35Result].count++;
+    console.log(`[Learn-OU35] "${ou35Key}" → ${ou35Result} (${totalGoals} gol)`);
   }
 
   recordMatchHistory(
@@ -1289,25 +1310,54 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     const bttsY = features.raw.bttsY;
     const ou25Available = !!(markets?.ou25?.over); // [FIX-P2-3] market gerçekten var mı?
 
+    // [FIX-P3-1] Öğrenilmiş OU25 pattern kontrolü
+    const ou25PatternKey  = stateKey + '|OU25_RESULT';
+    const ou25Pat         = memory.patterns[ou25PatternKey];
+    let   ou25LearnedProb = null;
+    if (ou25Pat) {
+      const over  = ou25Pat['OVER25']?.count  || 0;
+      const under = ou25Pat['UNDER25']?.count || 0;
+      const total = over + under;
+      if (total >= 3) ou25LearnedProb = over / total;
+    }
+
+    const ou35PatternKey  = stateKey + '|OU35_RESULT';
+    const ou35Pat         = memory.patterns[ou35PatternKey];
+    let   ou35LearnedProb = null;
+    if (ou35Pat) {
+      const over  = ou35Pat['OVER35']?.count  || 0;
+      const under = ou35Pat['UNDER35']?.count || 0;
+      const total = over + under;
+      if (total >= 3) ou35LearnedProb = over / total;
+    }
+
     if (ou25Available && ou25o) {
       if (ou25o < OU25_STRONG_THR) {
-        // Güçlü sinyal: < 1.35
         msSignals.push({
           type: 'OU25_OVER', tier: 'PREMIER',
           rule: `[nohtft-OU25-GÜÇLÜ] ou25.over=${ou25o?.toFixed(2)} (<${OU25_STRONG_THR})`,
-          prec: 7.5, lift: 1.8, effectiveLift: 1.8, prob: 0.68,
+          prec: 7.5, lift: 1.8, effectiveLift: 1.8,
+          prob:      ou25LearnedProb ?? 0.68,
           stateKey, trendStrength: 'bootstrap',
-          histCount: 0, accLabel: 'bootstrap', accuracy: null,
+          histCount: ou25Pat?.['OVER25']?.count || 0,
+          accLabel:  ou25LearnedProb != null
+            ? `öğrenilmiş(%${(ou25LearnedProb*100).toFixed(0)})`
+            : 'bootstrap',
+          accuracy:  ou25LearnedProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       } else if (ou25o < OU25_WEAK_THR && bttsY && bttsY < 1.70) {
-        // Zayıf sinyal: 1.35-1.50 + BTTS düşük
         msSignals.push({
           type: 'OU25_OVER', tier: 'STANDART',
           rule: `[nohtft-OU25-ZAYIF] ou25.over=${ou25o?.toFixed(2)} + btts.yes=${bttsY?.toFixed(2)} (btts<1.70 koşulu)`,
-          prec: 5.5, lift: 1.4, effectiveLift: 1.4, prob: 0.55,
+          prec: 5.5, lift: 1.4, effectiveLift: 1.4,
+          prob:      ou25LearnedProb ?? 0.55,
           stateKey, trendStrength: 'bootstrap',
-          histCount: 0, accLabel: 'bootstrap', accuracy: null,
+          histCount: ou25Pat?.['OVER25']?.count || 0,
+          accLabel:  ou25LearnedProb != null
+            ? `öğrenilmiş(%${(ou25LearnedProb*100).toFixed(0)})`
+            : 'bootstrap',
+          accuracy:  ou25LearnedProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       }
@@ -1317,29 +1367,39 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     // [FIX-P2-2] OU35_OVER: aynı iki seviyeli mantık
     const ou35  = markets?.['ou35']?.over ?? null;
     const ou35Available = !!(markets?.ou35?.over);
-
+ 
     if (ou35Available && ou35) {
       if (ou35 < OU35_STRONG_THR) {
         msSignals.push({
           type: 'OU35_OVER', tier: 'PREMIER',
           rule: `[nohtft-OU35-GÜÇLÜ] ou35.over=${ou35?.toFixed(2)} (<${OU35_STRONG_THR})`,
-          prec: 7.5, lift: 1.8, effectiveLift: 1.8, prob: 0.68,
+          prec: 7.5, lift: 1.8, effectiveLift: 1.8,
+          prob:      ou35LearnedProb ?? 0.68,
           stateKey, trendStrength: 'bootstrap',
-          histCount: 0, accLabel: 'bootstrap', accuracy: null,
+          histCount: ou35Pat?.['OVER35']?.count || 0,
+          accLabel:  ou35LearnedProb != null
+            ? `öğrenilmiş(%${(ou35LearnedProb*100).toFixed(0)})`
+            : 'bootstrap',
+          accuracy:  ou35LearnedProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       } else if (ou35 < OU35_WEAK_THR && bttsY && bttsY < 1.70) {
         msSignals.push({
           type: 'OU35_OVER', tier: 'STANDART',
           rule: `[nohtft-OU35-ZAYIF] ou35.over=${ou35?.toFixed(2)} + btts.yes=${bttsY?.toFixed(2)}`,
-          prec: 5.5, lift: 1.4, effectiveLift: 1.4, prob: 0.55,
+          prec: 5.5, lift: 1.4, effectiveLift: 1.4,
+          prob:      ou35LearnedProb ?? 0.55,
           stateKey, trendStrength: 'bootstrap',
-          histCount: 0, accLabel: 'bootstrap', accuracy: null,
+          histCount: ou35Pat?.['OVER35']?.count || 0,
+          accLabel:  ou35LearnedProb != null
+            ? `öğrenilmiş(%${(ou35LearnedProb*100).toFixed(0)})`
+            : 'bootstrap',
+          accuracy:  ou35LearnedProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       }
     }
-
+    
     finalSignals = msSignals;
   }
 
@@ -1584,7 +1644,7 @@ async function syncLiveMatches() {
         if (!prevLive.htFtResult) {
           resolvePendingSignal(fid, htFtResult, { ftHome, ftAway });
           resolvedCount++;
-          learnFromMatch(fid, htFtResult);
+          learnFromMatch(fid, htFtResult, { ftHome, ftAway });
           learnedCount++;
         }
       } else {
