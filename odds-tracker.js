@@ -1,40 +1,43 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v3.6-fixed
+ * ai_tracker.js — ScorePop Adaptive Tracker v3.7
  * ═══════════════════════════════════════════════════════════════════
- * v3.6-fixed değişiklikleri (v3.5 üzerine — cache analizi bulgularına göre):
+ * v3.7 değişiklikleri (v3.6-fixed üzerine — kullanıcı analiz bulgularına göre):
  *
- *  [FIX-P0-1] Eski 10-parçalı _stateKey cache migration:
- *    • loadCache içinde migrateStaleStateKeys() çalıştırılır.
- *    • Eski formattaki snapshot._stateKey'ler silinir, yeniden hesaplanır.
+ * [V37-1] Market Direction Engine (YENİ BÖLÜM 0.7):
+ *   • analyzeMarketDirection(): açılış→kapanış yön analizi
+ *   • detectLastMinuteMovements(): maç öncesi son 15dk büyük hareketler
+ *   • learnMarketDirectionOutcome(): yön→MS+OU sonuç öğrenme
+ *   • getMarketDirectionPrediction(): yön pattern'inden tahmin
+ *   • memory.marketDirectionPatterns kalıcı kaydı
  *
- *  [FIX-P0-2] Rapid-fire snapshot guard:
- *    • Son snapshot'dan bu yana < MIN_SNAP_INTERVAL_MS (4dk) geçmemişse
- *      yeni snapshot eklenmez, son snapshot güncellenir.
- *    • Shakhtar gibi 5sn'de 6 snapshot durumunu önler.
+ * [V37-2] UNDER Sinyali (kritik eksik düzeltme):
+ *   • OU25_UNDER sinyal üretimi eklendi (ou25.under < 1.60 veya öğrenilmiş)
+ *   • OU35_UNDER sinyal üretimi eklendi
+ *   • resolvePendingSignal: OU25_UNDER / OU35_UNDER doğruluk kontrolü eklendi
+ *   • learnFromMatch: UNDER25 / UNDER35 pattern kaydı eklendi
  *
- *  [FIX-P1-1] calcMoneyFlow — 1x2 + ht_1x2 tabanlı para akışı:
- *    • ftGroups() korunur (IY/MS varsa kullanılır).
- *    • IY/MS delta yoksa 1x2 + ht_1x2 delta proxy olarak kullanılır.
- *    • ev_ft_cum artık nohtft maçlarda da anlamlı değer alır.
+ * [V37-3] Trivial Sinyal Filtresi:
+ *   • ms1 < TRIVIAL_ODDS_THR (1.22) → MS_1 sinyali üretilmez
+ *   • ms2 < TRIVIAL_ODDS_THR → MS_2 sinyali üretilmez
+ *   • Bu eşiğin altında öğrenilmiş accuracy >= 0.80 ise izin verilir
  *
- *  [FIX-P1-2] Pending signal staleness timeout:
- *    • syncLiveMatches: MAX_PENDING_AGE_H (8 saat) geçen pendingSignal'lar
- *      iptal edilir — null skor gelmez ise sonsuz beklemez.
+ * [V37-4] Closing Shock (Son-Dakika Hareket) Tespiti:
+ *   • Son 15dk içinde %10+ hareket → rapid-fire guard bypass
+ *   • Shock snapshot'lar isShock=true ile işaretlenir
+ *   • Closing shock olan maçlarda effectiveLift +%20 bonus
+ *   • logSignals'a ⚡ kapanış şoku etiketi eklendi
  *
- *  [FIX-P2-1] nohtft stateKey collision düzeltmesi:
- *    • 6 → 7 parça: btts_bucket + iy1_bucket eklendi.
- *    • Vizela vs Shakhtar gibi farklı lig maçları artık farklı key'e düşer.
- *    • learnFromMatch + loadCache FIX-C 7 parçaya güncellendi.
+ * [V37-5] Market Yönü → StateKey Entegrasyonu:
+ *   • nohtft stateKey: ms1 açılış yönü (8. parça) eklendi
+ *   • "ms1dir_falling / stable / rising" bucket
+ *   • loadCache: eski 7-parçalı key'ler migration ile temizlenir
  *
- *  [FIX-P2-2] OU25_OVER iki seviyeli eşik:
- *    • Güçlü: ou25.over < 1.35 → PREMIER
- *    • Zayıf: 1.35-1.50 arası VE btts.yes < 1.70 → STANDART
- *    • 1.50-1.65: sessiz (önceden geniş 1.65 eşiği vardı)
+ * [V37-6] İş Akışı Öğrenmesi:
+ *   • learnFromMatch: market yönü öğrenmesi (learnMarketDirectionOutcome)
+ *   • Market yönü → sonuç matrisi kaydedilir (ms1dir × ou25dir × result)
+ *   • generateLocalInterpretation: yön analizi + kapanış hareketi notu eklendi
  *
- *  [FIX-P2-3] ou25 null guard:
- *    • ou25 market yokken OU25_OVER sinyali üretilmez.
- *
- *  v3.5'ten korunanlar: FIX-A..F, NEW-1..5, tüm v3.0 özellikleri.
+ * v3.6-fixed'ten korunanlar: FIX-P0..P3 tüm düzeltmeler, FIX-A..F, NEW-1..5
  */
 'use strict';
 
@@ -59,10 +62,10 @@ const ACCURACY_BOOST_THR   = parseFloat(process.env.ACCURACY_BOOST_THR   || '0.4
 const MIN_SIGNALS          = 1;
 const MAX_MATCH_HISTORY    = 500;
 
-// [FIX-P0-2] Rapid-fire guard: son snapshot'dan bu yana minimum süre
+// [FIX-P0-2] Rapid-fire guard
 const MIN_SNAP_INTERVAL_MS = 4 * 60 * 1000; // 4 dakika
 
-// [FIX-P1-2] Pending signal maksimum bekleme süresi
+// [FIX-P1-2] Pending signal maks bekleme
 const MAX_PENDING_AGE_H    = 8;
 
 // [FIX-P2-2] OU eşik seviyeleri
@@ -70,6 +73,21 @@ const OU25_STRONG_THR = 1.35;
 const OU25_WEAK_THR   = 1.50;
 const OU35_STRONG_THR = 1.35;
 const OU35_WEAK_THR   = 1.50;
+
+// [V37-3] Trivial sinyal eşiği — bu altında MS_1/MS_2 üretilmez
+const TRIVIAL_ODDS_THR = 1.22;
+
+// [V37-4] Closing shock eşiği — son 15dk %10+ hareket
+const CLOSING_SHOCK_THR = 0.10;
+
+// [V37-1] Market yön eşikleri
+const DIR_STRONG_THR = 0.08; // %8+ hareket = "strong"
+const DIR_NORMAL_THR = 0.03; // %3-8 = "normal"
+
+// [V37-2] UNDER sinyal koşulları
+const UNDER_ODDS_THR   = 1.60; // ou25.under bu altında → under sinyali
+const UNDER_OVER_MIN   = 1.80; // ou25.over bu üstünde → under sinyali
+const UNDER_LEARNED_THR = 0.55; // öğrenilmiş prob bu üstünde → under sinyali
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -79,13 +97,14 @@ const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_
 const matchCache = new Map();
 let firedAlerts  = {};
 let memory       = {
-  patterns:       {},
-  signalAccuracy: {},
-  pendingSignals: {},
-  marketStats:    {},
-  trapPatterns:   {},
-  matchHistory:   [],
-  version:        4,
+  patterns:               {},
+  signalAccuracy:         {},
+  pendingSignals:         {},
+  marketStats:            {},
+  trapPatterns:           {},
+  matchHistory:           [],
+  marketDirectionPatterns: {}, // [V37-1] YENİ
+  version:        5,
   totalLearned:   0,
 };
 let cycleCount = 0;
@@ -114,15 +133,20 @@ function resolvePendingSignal(fid, actualResult, scoreData = null) {
   } else if (topSignal === 'OU25_OVER') {
     if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
       isCorrect = (scoreData.ftHome + scoreData.ftAway) > 2.5;
-    } else {
-      isCorrect = null;
-    }
+    } else { isCorrect = null; }
   } else if (topSignal === 'OU35_OVER') {
     if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
       isCorrect = (scoreData.ftHome + scoreData.ftAway) > 3.5;
-    } else {
-      isCorrect = null;
-    }
+    } else { isCorrect = null; }
+  // [V37-2] UNDER doğruluk kontrolü
+  } else if (topSignal === 'OU25_UNDER') {
+    if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
+      isCorrect = (scoreData.ftHome + scoreData.ftAway) <= 2.5;
+    } else { isCorrect = null; }
+  } else if (topSignal === 'OU35_UNDER') {
+    if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
+      isCorrect = (scoreData.ftHome + scoreData.ftAway) <= 3.5;
+    } else { isCorrect = null; }
   } else {
     isCorrect = topSignal === actualResult;
   }
@@ -189,7 +213,7 @@ function logAccuracyReport() {
     const empty  = '░'.repeat(20 - Math.round(e.accuracy * 20));
     const rating = e.accuracy >= ACCURACY_BOOST_THR ? '✅ BOOST' :
                    e.accuracy <= ACCURACY_PENALTY_THR ? '❌ BASTIR' : '⚡ NORMAL';
-    console.log(`  ${e.type.padEnd(5)} ${bar}${empty} %${(e.accuracy*100).toFixed(1).padStart(5)} (${e.correct}/${e.fired}) ${rating}`);
+    console.log(`  ${e.type.padEnd(12)} ${bar}${empty} %${(e.accuracy*100).toFixed(1).padStart(5)} (${e.correct}/${e.fired}) ${rating}`);
   }
   const tf = entries.reduce((s, e) => s + e.fired, 0);
   const tc = entries.reduce((s, e) => s + e.correct, 0);
@@ -420,13 +444,14 @@ function logTrapReport() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 0.6 — CACHE MİGRASYON [FIX-P0-1]
+// BÖLÜM 0.6 — CACHE MİGRASYON [FIX-P0-1 + V37-5]
 // ════════════════════════════════════════════════════════════════════
 
 /**
- * Eski 10-parçalı _stateKey formatını temizle.
- * Yeni format: htft=6 parça (iyms22d içerir), nohtft=7 parça (nohtft ile başlar).
- * Eski format (v3.4 ve öncesi): 10 parça — artık kabul edilmiyor.
+ * Geçersiz stateKey formatlarını temizle.
+ * htft = 6 parça (iyms22d içerir)
+ * nohtft = 7 veya 8 parça (nohtft ile başlar)
+ * Eski 10-parçalı veya başka formatlardakiler silinir.
  */
 function migrateStaleStateKeys() {
   let count = 0;
@@ -435,7 +460,8 @@ function migrateStaleStateKeys() {
       if (!snap._stateKey) continue;
       const parts = snap._stateKey.split('|');
       const isValidHtFt   = parts.length === 6 && snap._stateKey.includes('iyms22d');
-      const isValidNoHtFt = parts.length === 7 && snap._stateKey.startsWith('nohtft');
+      // [V37-5] nohtft artık 7 veya 8 parça (ms1dir eklendi)
+      const isValidNoHtFt = (parts.length === 7 || parts.length === 8) && snap._stateKey.startsWith('nohtft');
       if (!isValidHtFt && !isValidNoHtFt) {
         delete snap._stateKey;
         count++;
@@ -443,9 +469,230 @@ function migrateStaleStateKeys() {
     }
   }
   if (count > 0)
-    console.log(`[Migration-P0-1] ${count} eski format _stateKey temizlendi — yeniden hesaplanacak`);
+    console.log(`[Migration] ${count} eski format _stateKey temizlendi — yeniden hesaplanacak`);
   else
-    console.log(`[Migration-P0-1] Tüm _stateKey'ler geçerli formatta`);
+    console.log(`[Migration] Tüm _stateKey'ler geçerli formatta`);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// BÖLÜM 0.7 — MARKET YÖN ANALİZİ [V37-1]
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Açılış → kapanış yön analizi.
+ * Her market için: strong_down | down | stable | up | strong_up
+ *
+ * Yorum:
+ *   ms1 down  = ms1 oranı düştü = Eve para girdi = ev favori güçlendi
+ *   ms1 up    = ms1 oranı yükseldi = Evden para çıktı = ev zayıfladı
+ *   ou25o down = 2.5 üst oranı düştü = Üste para girdi = gol beklentisi arttı
+ *   ou25o up   = 2.5 üst oranı yükseldi = Üsten para çıktı = gol beklentisi azaldı (UNDER)
+ */
+function analyzeMarketDirection(openingMarkets, closingMarkets) {
+  if (!openingMarkets || !closingMarkets) return {};
+
+  const dirs = {};
+  const PAIRS = [
+    ['1x2',    ['home', 'away', 'draw']],
+    ['ht_1x2', ['home', 'away', 'draw']],
+    ['ou25',   ['over', 'under']],
+    ['ou35',   ['over', 'under']],
+    ['btts',   ['yes', 'no']],
+    ['ht_ft',  ['1/1', '2/2', '2/1', '1/2', 'X/X']],
+  ];
+
+  for (const [mkt, subs] of PAIRS) {
+    dirs[mkt] = {};
+    const o = openingMarkets[mkt] || {};
+    const c = closingMarkets[mkt] || {};
+    for (const sub of subs) {
+      const ov = o[sub], cv = c[sub];
+      if (!ov || !cv || ov === 0) { dirs[mkt][sub] = 'unknown'; continue; }
+      const pct = (cv - ov) / ov;
+      if      (pct <= -DIR_STRONG_THR) dirs[mkt][sub] = 'strong_down';
+      else if (pct <= -DIR_NORMAL_THR) dirs[mkt][sub] = 'down';
+      else if (pct >=  DIR_STRONG_THR) dirs[mkt][sub] = 'strong_up';
+      else if (pct >=  DIR_NORMAL_THR) dirs[mkt][sub] = 'up';
+      else                              dirs[mkt][sub] = 'stable';
+    }
+  }
+  return dirs;
+}
+
+/**
+ * ms1 açılış oranından yön bucket üretir (nohtft stateKey için).
+ * Açılış oranı yoksa 'unknown' döner.
+ */
+function getMs1DirBucket(openingMarkets, closingMarkets) {
+  const open  = openingMarkets?.['1x2']?.home;
+  const close = closingMarkets?.['1x2']?.home;
+  if (!open || !close) return 'unknown';
+  const pct = (close - open) / open;
+  if (pct <= -DIR_STRONG_THR) return 'falling';  // Eve güçlü para girdi
+  if (pct <= -DIR_NORMAL_THR) return 'falling';
+  if (pct >=  DIR_NORMAL_THR) return 'rising';   // Evden para çıktı
+  return 'stable';
+}
+
+/**
+ * Son 15 dakika içindeki büyük oran hareketlerini tespit eder.
+ * Returning: [{ market, sub, fromVal, toVal, pctChange, direction }] | null
+ */
+function detectLastMinuteMovements(snapshots, kickoff) {
+  if (!kickoff || !snapshots || snapshots.length < 2) return null;
+
+  const closing = getSnapshotNearMinutes(snapshots, kickoff, 10);
+  const prior   = getSnapshotNearMinutes(snapshots, kickoff, 45);
+  if (!closing || !prior) return null;
+
+  // Aynı snapshot ise hareket yok
+  if (closing.time === prior.time) return null;
+
+  const closeMkts = closing.markets || {};
+  const priorMkts = prior.markets || {};
+  const movements = [];
+
+  const CHECK_PAIRS = [
+    ['1x2',    ['home', 'away', 'draw']],
+    ['ou25',   ['over', 'under']],
+    ['ou35',   ['over', 'under']],
+    ['btts',   ['yes']],
+    ['ht_1x2', ['home', 'away']],
+  ];
+
+  for (const [mkt, subs] of CHECK_PAIRS) {
+    for (const sub of subs) {
+      const fromVal = priorMkts[mkt]?.[sub];
+      const toVal   = closeMkts[mkt]?.[sub];
+      if (!fromVal || !toVal || fromVal === 0) continue;
+      const pct = (toVal - fromVal) / fromVal;
+      if (Math.abs(pct) >= CLOSING_SHOCK_THR) {
+        movements.push({
+          market:    mkt,
+          sub,
+          fromVal:   +fromVal.toFixed(2),
+          toVal:     +toVal.toFixed(2),
+          pctChange: +(pct * 100).toFixed(1),
+          direction: pct < 0 ? 'down' : 'up',
+        });
+      }
+    }
+  }
+
+  return movements.length > 0 ? movements : null;
+}
+
+/**
+ * Market yönü → MS + OU sonuç öğrenmesi.
+ * Key: "dir|ms1_{dir}|ms2_{dir}|ou25o_{dir}"
+ * Değer: { count, ms:{'1':n,'X':n,'2':n}, ou:{OVER25:n,UNDER25:n,OVER35:n,UNDER35:n} }
+ */
+function learnMarketDirectionOutcome(fixtureId, actualHtFt, scoreData) {
+  const match = matchCache.get(fixtureId);
+  if (!match) return;
+
+  const directions = analyzeMarketDirection(match.openingMarkets, match.closingMarkets);
+  if (!Object.keys(directions).length) return;
+
+  const ms1Dir  = directions['1x2']?.home   || 'unknown';
+  const ms2Dir  = directions['1x2']?.away   || 'unknown';
+  const ou25Dir = directions['ou25']?.over  || 'unknown';
+
+  // Yön anahtarı
+  const dirKey = `dir|ms1_${ms1Dir}|ms2_${ms2Dir}|ou25o_${ou25Dir}`;
+
+  if (!memory.marketDirectionPatterns) memory.marketDirectionPatterns = {};
+  if (!memory.marketDirectionPatterns[dirKey])
+    memory.marketDirectionPatterns[dirKey] = {
+      count: 0,
+      ms:   { '1': 0, 'X': 0, '2': 0 },
+      ou:   { OVER25: 0, UNDER25: 0, OVER35: 0, UNDER35: 0 },
+      firstSeen: new Date().toISOString(),
+    };
+
+  const pat = memory.marketDirectionPatterns[dirKey];
+  pat.count++;
+
+  // MS sonucu (1, X, 2)
+  const msResult = actualHtFt.split('/')[1];
+  if (pat.ms[msResult] !== undefined) pat.ms[msResult]++;
+
+  // OU sonucu
+  if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
+    const goals = scoreData.ftHome + scoreData.ftAway;
+    if (goals > 2.5) pat.ou.OVER25++;  else pat.ou.UNDER25++;
+    if (goals > 3.5) pat.ou.OVER35++;  else pat.ou.UNDER35++;
+  }
+
+  console.log(`  [DirLearn] ${dirKey} → MS:${msResult} (${pat.count}. kayıt)`);
+}
+
+/**
+ * Market yönü pattern'inden MS ve OU tahmini üretir.
+ * Yeterli veri yoksa null döner.
+ */
+function getMarketDirectionPrediction(openingMarkets, closingMarkets) {
+  if (!openingMarkets || !closingMarkets) return null;
+
+  const directions = analyzeMarketDirection(openingMarkets, closingMarkets);
+  const ms1Dir  = directions['1x2']?.home   || 'unknown';
+  const ms2Dir  = directions['1x2']?.away   || 'unknown';
+  const ou25Dir = directions['ou25']?.over  || 'unknown';
+
+  const dirKey = `dir|ms1_${ms1Dir}|ms2_${ms2Dir}|ou25o_${ou25Dir}`;
+  const pat    = memory.marketDirectionPatterns?.[dirKey];
+  if (!pat || pat.count < 3) return null;
+
+  const msTotal = (pat.ms['1'] || 0) + (pat.ms['X'] || 0) + (pat.ms['2'] || 0);
+  const msBest  = Object.entries(pat.ms).sort((a, b) => b[1] - a[1])[0];
+
+  const ouTotal      = (pat.ou?.OVER25 || 0) + (pat.ou?.UNDER25 || 0);
+  const ouOverProb   = ouTotal > 0 ? (pat.ou.OVER25  || 0) / ouTotal : 0.5;
+  const ouUnderProb  = ouTotal > 0 ? (pat.ou.UNDER25 || 0) / ouTotal : 0.5;
+
+  const ou35Total    = (pat.ou?.OVER35 || 0) + (pat.ou?.UNDER35 || 0);
+  const ou35OverProb = ou35Total > 0 ? (pat.ou.OVER35 || 0) / ou35Total : 0.5;
+
+  return {
+    dirKey,
+    directions,
+    msBest:       msBest?.[0],
+    msProb:       msTotal > 0 ? msBest[1] / msTotal : 0,
+    msCount:      pat.count,
+    ouOverProb,
+    ouUnderProb,
+    ou35OverProb,
+    ou35UnderProb: ou35Total > 0 ? (pat.ou.UNDER35 || 0) / ou35Total : 0.5,
+    count:        pat.count,
+  };
+}
+
+/**
+ * Market yön özeti için insan-okunabilir etiket.
+ * Eve para girdi / Depoya para girdi / Üste para girdi / Alta para girdi
+ */
+function describeMarketDirection(directions) {
+  const notes = [];
+  const ms1d = directions?.['1x2']?.home;
+  const ms2d = directions?.['1x2']?.away;
+  const ou25d = directions?.['ou25']?.over;
+
+  if (ms1d === 'strong_down' || ms1d === 'down')
+    notes.push('Eve para girdi (ms1 düştü)');
+  else if (ms1d === 'strong_up' || ms1d === 'up')
+    notes.push('Evden para çıktı (ms1 yükseldi)');
+
+  if (ms2d === 'strong_down' || ms2d === 'down')
+    notes.push('Depo güçlendi (ms2 düştü)');
+  else if (ms2d === 'strong_up' || ms2d === 'up')
+    notes.push('Depo zayıfladı (ms2 yükseldi)');
+
+  if (ou25d === 'strong_down' || ou25d === 'down')
+    notes.push('Üste para girdi (ou25 over düştü)');
+  else if (ou25d === 'strong_up' || ou25d === 'up')
+    notes.push('Alta para girdi (ou25 over yükseldi → UNDER)');
+
+  return notes.length > 0 ? notes.join(' | ') : 'Piyasa hareketsiz kaldı';
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -467,14 +714,15 @@ function loadCache() {
       const loaded = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
       if (!loaded.patterns) loaded.patterns = {};
       memory = {
-        patterns:       loaded.patterns       || {},
-        signalAccuracy: loaded.signalAccuracy || {},
-        pendingSignals: loaded.pendingSignals || {},
-        marketStats:    loaded.marketStats    || {},
-        trapPatterns:   loaded.trapPatterns   || {},
-        matchHistory:   loaded.matchHistory   || [],
-        version:        4,
-        totalLearned:   loaded.totalLearned   || 0,
+        patterns:                loaded.patterns                || {},
+        signalAccuracy:          loaded.signalAccuracy          || {},
+        pendingSignals:          loaded.pendingSignals          || {},
+        marketStats:             loaded.marketStats             || {},
+        trapPatterns:            loaded.trapPatterns            || {},
+        matchHistory:            loaded.matchHistory            || [],
+        marketDirectionPatterns: loaded.marketDirectionPatterns || {}, // [V37-1]
+        version:        5,
+        totalLearned:   loaded.totalLearned || 0,
       };
       console.log(
         `[Memory] ${Object.keys(memory.patterns).length} pattern` +
@@ -482,38 +730,37 @@ function loadCache() {
         ` | ${Object.keys(memory.signalAccuracy).length} doğruluk kaydı` +
         ` | ${Object.keys(memory.pendingSignals).length} bekleyen sinyal` +
         ` | ${Object.keys(memory.trapPatterns).length} tuzak pattern` +
-        ` | ${memory.matchHistory.length} maç geçmişi`
+        ` | ${memory.matchHistory.length} maç geçmişi` +
+        ` | ${Object.keys(memory.marketDirectionPatterns).length} yön pattern`
       );
     } catch (e) { console.warn('[Memory] Yüklenemedi:', e.message); }
   }
 
-  // [FIX-P0-1] Cache'deki eski format _stateKey'leri temizle
   migrateStaleStateKeys();
 
-  // [FIX-B] AccReset KALDIRILDI
   for (const [type, acc] of Object.entries(memory.signalAccuracy)) {
     if (!acc.recent) acc.recent = [];
     if (acc.fired >= ACCURACY_MIN_SAMPLES) {
       const accuracy = acc.correct / acc.fired;
       if (accuracy <= ACCURACY_PENALTY_THR)
-        console.log(`[AccWarn] ${type} doğruluk düşük: %${(accuracy*100).toFixed(0)} — bastırılacak ama sıfırlanmayacak`);
+        console.log(`[AccWarn] ${type} doğruluk düşük: %${(accuracy*100).toFixed(0)} — bastırılacak`);
     }
   }
 
-  // [FIX-C] v3.6-fixed: nohtft artık 7 parça
+  // [FIX-C] v3.7: nohtft 7 veya 8 parça
   let stalePending = 0;
   for (const [fid, p] of Object.entries(memory.pendingSignals)) {
     const sk    = p.stateKey || '';
     const parts = sk.split('|');
     const isHtFtFormat   = parts.length === 6 && sk.includes('iyms22d');
-    const isNoHtFtFormat = parts.length === 7 && sk.startsWith('nohtft'); // [FIX-P2-1] 7 parça
+    const isNoHtFtFormat = (parts.length === 7 || parts.length === 8) && sk.startsWith('nohtft');
     if (!isHtFtFormat && !isNoHtFtFormat) {
       delete memory.pendingSignals[fid];
       stalePending++;
     }
   }
   if (stalePending > 0)
-    console.log(`[Fix-C] ${stalePending} eski/geçersiz format pendingSignal temizlendi.`);
+    console.log(`[Fix-C] ${stalePending} eski format pendingSignal temizlendi.`);
 }
 
 function saveCache() {
@@ -562,7 +809,7 @@ function fetchJSON(url) {
         'Accept-Encoding': 'identity',
         'Referer':         'https://www.nesine.com/',
         'Origin':          'https://www.nesine.com',
-        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.6)',
+        'User-Agent':      'Mozilla/5.0 (compatible; ScorePop/3.7)',
       }
     }, res => {
       let buf = '';
@@ -682,7 +929,6 @@ function calcDelta(prev, curr) {
   return ch;
 }
 
-// ftGroups: IY/MS tabanlı para akışı (IY/MS oranı olan maçlar için)
 function ftGroups(changes) {
   const s = k => changes?.ht_ft?.[k] || 0;
   return {
@@ -692,18 +938,6 @@ function ftGroups(changes) {
   };
 }
 
-/**
- * [FIX-P1-1] calcMoneyFlow — Karma para akışı hesabı.
- * IY/MS delta varsa → ftGroups mantığı (ağırlıklı).
- * IY/MS delta yoksa (nohtft veya oran sabitlenmiş) → 1x2 + ht_1x2 proxy.
- * Ölçek: 1x2 delta küçük olduğu için SCALE=15 ile ftGroups değerleriyle karşılaştırılabilir yapılır.
- *
- * Cache doğrulaması:
- *   - Celtic: ms1 sabit (0 delta), htft sabit → ev_ft=0 (doğru — oran hareket etmedi)
- *   - Shakhtar: ms1=1.67 sabit → ev_ft=0 (doğru — tek snapshot periyodunda değişim yok)
- *   - Vizela: ms1=1.76 sabit → ev_ft=0 (aynı)
- *   Hareket eden bir maçta: ms1: 2.98→2.64 → delta=-0.34 → ev_proxy=-0.34*15=-5.1 → kümülatif birikir ✓
- */
 function calcMoneyFlow(markets, changes) {
   const htft = changes?.ht_ft || {};
   const htft_ev  = (htft['1/1'] || 0) + (htft['2/1'] || 0) + (htft['X/1'] || 0);
@@ -711,18 +945,15 @@ function calcMoneyFlow(markets, changes) {
   const bera     = (htft['1/X'] || 0) + (htft['2/X'] || 0) + (htft['X/X'] || 0);
   const hasHtFtSignal = Object.values(htft).some(v => v !== 0);
 
-  // 1x2 + ht_1x2 proxy (her zaman hesapla)
   const ms1d = changes?.['1x2']?.home    || 0;
   const ms2d = changes?.['1x2']?.away    || 0;
   const iy1d = changes?.['ht_1x2']?.home || 0;
   const iy2d = changes?.['ht_1x2']?.away || 0;
-  const SCALE = 15; // oran deltaları ~0.01-0.10; ftGroups ~0.1-2.0 → ölçek
+  const SCALE = 15;
 
   const ev_proxy  = (ms1d + iy1d * 0.5) * SCALE;
   const dep_proxy = (ms2d + iy2d * 0.5) * SCALE;
 
-  // IY/MS sinyali varsa baskın, proxy destekleyici
-  // IY/MS yoksa yalnızca proxy
   return {
     ev_ft:  hasHtFtSignal ? htft_ev  + ev_proxy  * 0.2 : ev_proxy,
     dep_ft: hasHtFtSignal ? htft_dep + dep_proxy * 0.2 : dep_proxy,
@@ -792,6 +1023,30 @@ function analyzeFeatureImportance() {
   for (const r of ranked)
     console.log(`  ${r.feature.padEnd(35)} lift: ${r.avgLift}x`);
   console.log('─'.repeat(55) + '\n');
+
+  // [V37-1] Market yön pattern raporu
+  const topDirPats = Object.entries(memory.marketDirectionPatterns || {})
+    .filter(([, v]) => v.count >= 3)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 8);
+  if (topDirPats.length > 0) {
+    console.log('  📐 MARKET YÖN PATTERN RAPORU');
+    console.log('─'.repeat(55));
+    for (const [key, val] of topDirPats) {
+      const msTotal = (val.ms['1']||0) + (val.ms['X']||0) + (val.ms['2']||0);
+      const ouTotal = (val.ou?.OVER25||0) + (val.ou?.UNDER25||0);
+      const msStr   = msTotal > 0
+        ? `MS: 1=%${((val.ms['1']||0)/msTotal*100).toFixed(0)} X=%${((val.ms['X']||0)/msTotal*100).toFixed(0)} 2=%${((val.ms['2']||0)/msTotal*100).toFixed(0)}`
+        : 'MS: -';
+      const ouStr   = ouTotal > 0
+        ? `OU: üst=%${((val.ou.OVER25||0)/ouTotal*100).toFixed(0)} alt=%${((val.ou.UNDER25||0)/ouTotal*100).toFixed(0)}`
+        : 'OU: -';
+      console.log(`  [${val.count}x] ${key.replace('dir|','').substring(0, 40)}`);
+      console.log(`        ${msStr} | ${ouStr}`);
+    }
+    console.log('─'.repeat(55) + '\n');
+  }
+
   return ranked;
 }
 
@@ -848,7 +1103,6 @@ function calcFromOpen(openingMarkets, currMarkets) {
 function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) {
   const mk = (k, s) => markets?.[k]?.[s] ?? null;
 
-  // [FIX-P1-1] ftGroups yerine calcMoneyFlow — nohtft maçlarda da ev_ft anlamlı olur
   const { ev_ft, dep_ft } = calcMoneyFlow(markets, changes || {});
 
   const ms1    = mk('1x2',    'home');
@@ -953,10 +1207,15 @@ function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) 
   };
 }
 
-function generateStateKey(features) {
+/**
+ * [V37-5] generateStateKey — nohtft artık 8 parça: ms1dir eklendi.
+ * Açılış yönü, hangi yöne para aktığını gösterir:
+ *   falling = eve para girdi, stable = hareketsiz, rising = evden para çıktı
+ */
+function generateStateKey(features, openingMarkets, closingMarkets) {
   const b = features.buckets;
 
-  // IY/MS varsa: 6-parçalı htft formatı (değişmedi)
+  // IY/MS varsa: 6-parçalı htft formatı
   if (features.hasHtFt) {
     return [
       `ms1_${b.ms1_bucket}`,
@@ -968,22 +1227,23 @@ function generateStateKey(features) {
     ].join('|');
   }
 
-  // [FIX-P2-1] nohtft: 7-parçalı format — btts_bucket + iy1_bucket eklendi
-  // Vizela (btts=1.59 → low) ≠ Shakhtar (btts=1.73 → med) → farklı key ✓
-  // Cache doğrulaması: aynı ms1/ms2/au25 ile ama btts farklı → collision önlendi
+  // [V37-5] nohtft: 8-parçalı format — ms1dir eklendi
   const ms1ms2ratio = features.raw.ms1 && features.raw.ms2
     ? (features.raw.ms1 < features.raw.ms2 ? 'ev_fav'
       : features.raw.ms1 > features.raw.ms2 * 1.5 ? 'dep_fav' : 'dengeli')
     : 'unknown';
+
+  const ms1DirBucket = getMs1DirBucket(openingMarkets, closingMarkets);
 
   return [
     `nohtft`,
     `ms1_${b.ms1_bucket}`,
     `ms2_${b.ms2_bucket}`,
     `au25_${b.au25o_bucket}`,
-    `btts_${b.btts_bucket}`,   // [FIX-P2-1] yeni: collision buster
+    `btts_${b.btts_bucket}`,
     `ratio_${ms1ms2ratio}`,
-    `iy1_${b.iy1_bucket}`,    // [FIX-P2-1] yeni: lig seviyesi proxy
+    `iy1_${b.iy1_bucket}`,
+    `ms1dir_${ms1DirBucket}`, // [V37-5] Açılış yönü
   ].join('|');
 }
 
@@ -1014,10 +1274,10 @@ function learnFromMatch(fixtureId, actualHtFt, scoreData = null) {
     key = lastSnap._stateKey;
   }
 
-  // [FIX-P2-1] nohtft artık 7 parça
-  const keyParts      = key.split('|');
-  const isHtFtKey     = keyParts.length === 6 && key.includes('iyms22d');
-  const isNoHtFtKey   = keyParts.length === 7 && key.startsWith('nohtft'); // [FIX-P2-1]
+  // [V37-5] nohtft artık 7 veya 8 parça
+  const keyParts    = key.split('|');
+  const isHtFtKey   = keyParts.length === 6 && key.includes('iyms22d');
+  const isNoHtFtKey = (keyParts.length === 7 || keyParts.length === 8) && key.startsWith('nohtft');
   if (!isHtFtKey && !isNoHtFtKey) {
     console.warn(`[Learn] fixture=${fixtureId} tanınmayan stateKey formatı → atlandı: ${key}`);
     return;
@@ -1042,10 +1302,11 @@ function learnFromMatch(fixtureId, actualHtFt, scoreData = null) {
     console.log(`[Learn-MS] "${msKey}" → ${msResult}`);
   }
 
-  // [FIX-P3-1] nohtft maçlarda OU sonucunu da öğren
+  // OU öğrenmesi
   if (isNoHtFtKey && scoreData?.ftHome != null && scoreData?.ftAway != null) {
     const totalGoals = scoreData.ftHome + scoreData.ftAway;
 
+    // [V37-2] UNDER da öğrenilsin
     const ou25Result = totalGoals > 2.5 ? 'OVER25' : 'UNDER25';
     const ou25Key    = key + '|OU25_RESULT';
     if (!memory.patterns[ou25Key]) memory.patterns[ou25Key] = {};
@@ -1062,6 +1323,9 @@ function learnFromMatch(fixtureId, actualHtFt, scoreData = null) {
     memory.patterns[ou35Key][ou35Result].count++;
     console.log(`[Learn-OU35] "${ou35Key}" → ${ou35Result} (${totalGoals} gol)`);
   }
+
+  // [V37-6] Market yönü öğrenmesi
+  learnMarketDirectionOutcome(fixtureId, actualHtFt, scoreData);
 
   recordMatchHistory(
     fixtureId,
@@ -1147,7 +1411,8 @@ function predictWithSimilarity(stateKey) {
 // ════════════════════════════════════════════════════════════════════
 function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMarkets, fingerprint) {
   const features  = extractFeatures(markets, changes, cumCache, snapshots, openingMarkets);
-  const stateKey  = generateStateKey(features);
+  // [V37-5] generateStateKey artık openingMarkets/closingMarkets alıyor
+  const stateKey  = generateStateKey(features, openingMarkets, markets);
   const raw       = features.raw;
   const b         = features.buckets;
   const hasHtFt   = features.hasHtFt;
@@ -1157,6 +1422,13 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
   const predictions    = predictWithSimilarity(stateKey);
   const similarMatches = findSimilarMatches(markets);
   const signals        = [];
+
+  // [V37-1] Market yönü tahmini
+  const dirPred = getMarketDirectionPrediction(openingMarkets, markets);
+
+  // [V37-4] Kapanış şoku tespiti
+  const closingShocks = detectLastMinuteMovements(snapshots, null); // kickoff olmadan yakın snapshot karşılaştırması
+  const hasClosingShock = closingShocks && closingShocks.length > 0;
 
   const trendStrength =
     (b.ev_momentum === 'falling' && b.dep_momentum === 'rising') ? 'strong_reversal' :
@@ -1289,61 +1561,102 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       if (lift < 1.10) continue;
       const { multiplier, label: accLabel, accuracy } = getAccuracyMultiplier('MS_' + ms);
       if (multiplier === 0.0) continue;
+
+      // [V37-3] Trivial sinyal filtresi
+      // Çok düşük oran = zaten herkes biliyor, ML değer katmıyor
+      const isTrivialMs1 = ms === '1' && raw.ms1 && raw.ms1 < TRIVIAL_ODDS_THR;
+      const isTrivialMs2 = ms === '2' && raw.ms2 && raw.ms2 < TRIVIAL_ODDS_THR;
+      if (isTrivialMs1 || isTrivialMs2) {
+        // Yalnızca çok güçlü öğrenilmiş doğrulukla geçer
+        const trivialAcc = accuracy ?? 0;
+        if (trivialAcc < 0.80) {
+          console.log(`[V37-3] MS_${ms} trivial eşikte (oran=${ms==='1'?raw.ms1?.toFixed(2):raw.ms2?.toFixed(2)}<${TRIVIAL_ODDS_THR}) — sinyal bastırıldı`);
+          continue;
+        }
+        console.log(`[V37-3] MS_${ms} trivial ama doğruluk yüksek (%${(trivialAcc*100).toFixed(0)}) — izin verildi`);
+      }
+
+      let effectiveLift = +(lift * multiplier).toFixed(2);
+      let tier = lift >= 1.5 ? 'PREMIER' : 'STANDART';
+
+      // [V37-4] Kapanış şoku varsa lift bonus
+      if (hasClosingShock) {
+        effectiveLift = +(effectiveLift * 1.20).toFixed(2);
+        if (tier === 'STANDART') tier = 'PREMIER';
+      }
+
+      // [V37-1] Yön tahmini uyumlu mu?
+      let dirNote = '';
+      if (dirPred && dirPred.msBest === ms && dirPred.msProb > 0.55 && dirPred.count >= 5) {
+        effectiveLift = +(effectiveLift * 1.10).toFixed(2);
+        dirNote = ` | 📐yön:${ms}(%${(dirPred.msProb*100).toFixed(0)},${dirPred.count}x)`;
+      }
+
       msSignals.push({
         type:          'MS_' + ms,
-        tier:          lift >= 1.5 ? 'PREMIER' : 'STANDART',
-        rule:          `[nohtft-MS] Agregat prob=${prob.toFixed(2)} | stateKey=${stateKey.substring(0, 40)}`,
+        tier,
+        rule:          `[nohtft-MS] Agregat prob=${prob.toFixed(2)} | stateKey=${stateKey.substring(0, 40)}${dirNote}`,
         prec:          +(prob * 10).toFixed(2),
         lift:          +lift.toFixed(2),
-        effectiveLift: +(lift * multiplier).toFixed(2),
+        effectiveLift,
         prob:          +prob.toFixed(3),
         stateKey, trendStrength,
         histCount: msCounts[ms], accLabel, accuracy,
         hasHtFt: false,
         trapRisk: 0, similarCount: similarMatches.length,
         decisiveMarket: null,
+        closingShock: hasClosingShock,
       });
     }
 
-    // [FIX-P2-2 + FIX-P2-3] OU25_OVER: iki seviyeli eşik + ou25 null guard
+    // ────────────────────────────────────────────────────────────
+    // OU25 SİNYALLERİ [V37-2: UNDER eklendi]
+    // ────────────────────────────────────────────────────────────
     const ou25o = features.raw.au25o;
     const bttsY = features.raw.bttsY;
-    const ou25Available = !!(markets?.ou25?.over); // [FIX-P2-3] market gerçekten var mı?
+    const ou25Available = !!(markets?.ou25?.over);
+    const ou25u = markets?.['ou25']?.under ?? null;
 
-    // [FIX-P3-1] Öğrenilmiş OU25 pattern kontrolü
-    const ou25PatternKey  = stateKey + '|OU25_RESULT';
-    const ou25Pat         = memory.patterns[ou25PatternKey];
-    let   ou25LearnedProb = null;
+    // OU25 pattern öğrenilmiş istatistikleri
+    const ou25PatternKey = stateKey + '|OU25_RESULT';
+    const ou25Pat        = memory.patterns[ou25PatternKey];
+    let ou25OverProb = null, ou25UnderProb = null;
     if (ou25Pat) {
       const over  = ou25Pat['OVER25']?.count  || 0;
       const under = ou25Pat['UNDER25']?.count || 0;
       const total = over + under;
-      if (total >= 3) ou25LearnedProb = over / total;
+      if (total >= 3) {
+        ou25OverProb  = over  / total;
+        ou25UnderProb = under / total;
+      }
     }
 
-    const ou35PatternKey  = stateKey + '|OU35_RESULT';
-    const ou35Pat         = memory.patterns[ou35PatternKey];
-    let   ou35LearnedProb = null;
+    // OU35 pattern
+    const ou35PatternKey = stateKey + '|OU35_RESULT';
+    const ou35Pat        = memory.patterns[ou35PatternKey];
+    let ou35OverProb = null, ou35UnderProb = null;
     if (ou35Pat) {
       const over  = ou35Pat['OVER35']?.count  || 0;
       const under = ou35Pat['UNDER35']?.count || 0;
       const total = over + under;
-      if (total >= 3) ou35LearnedProb = over / total;
+      if (total >= 3) {
+        ou35OverProb  = over  / total;
+        ou35UnderProb = under / total;
+      }
     }
 
     if (ou25Available && ou25o) {
+      // ── OU25 OVER sinyali ──────────────────────────────────────
       if (ou25o < OU25_STRONG_THR) {
         msSignals.push({
           type: 'OU25_OVER', tier: 'PREMIER',
           rule: `[nohtft-OU25-GÜÇLÜ] ou25.over=${ou25o?.toFixed(2)} (<${OU25_STRONG_THR})`,
           prec: 7.5, lift: 1.8, effectiveLift: 1.8,
-          prob:      ou25LearnedProb ?? 0.68,
+          prob:      ou25OverProb ?? 0.68,
           stateKey, trendStrength: 'bootstrap',
           histCount: ou25Pat?.['OVER25']?.count || 0,
-          accLabel:  ou25LearnedProb != null
-            ? `öğrenilmiş(%${(ou25LearnedProb*100).toFixed(0)})`
-            : 'bootstrap',
-          accuracy:  ou25LearnedProb,
+          accLabel:  ou25OverProb != null ? `öğrenilmiş(%${(ou25OverProb*100).toFixed(0)})` : 'bootstrap',
+          accuracy:  ou25OverProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       } else if (ou25o < OU25_WEAK_THR && bttsY && bttsY < 1.70) {
@@ -1351,36 +1664,65 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
           type: 'OU25_OVER', tier: 'STANDART',
           rule: `[nohtft-OU25-ZAYIF] ou25.over=${ou25o?.toFixed(2)} + btts.yes=${bttsY?.toFixed(2)} (btts<1.70 koşulu)`,
           prec: 5.5, lift: 1.4, effectiveLift: 1.4,
-          prob:      ou25LearnedProb ?? 0.55,
+          prob:      ou25OverProb ?? 0.55,
           stateKey, trendStrength: 'bootstrap',
           histCount: ou25Pat?.['OVER25']?.count || 0,
-          accLabel:  ou25LearnedProb != null
-            ? `öğrenilmiş(%${(ou25LearnedProb*100).toFixed(0)})`
-            : 'bootstrap',
-          accuracy:  ou25LearnedProb,
+          accLabel:  ou25OverProb != null ? `öğrenilmiş(%${(ou25OverProb*100).toFixed(0)})` : 'bootstrap',
+          accuracy:  ou25OverProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       }
-      // 1.50-1.65 arası: sessiz — eski 1.65 eşiği kaldırıldı [FIX-P2-2]
+
+      // ── OU25 UNDER sinyali [V37-2] ─────────────────────────────
+      // Piyasa UNDER'ı fiyatlıyor: under oranı düşük + over oranı yüksek
+      const marketExpectsUnder = ou25u && ou25u < UNDER_ODDS_THR && ou25o > UNDER_OVER_MIN;
+      // Öğrenilmiş pattern UNDER'ı söylüyor
+      const learnedExpectsUnder = ou25UnderProb !== null && ou25UnderProb > UNDER_LEARNED_THR;
+      // Market yönü: over oranı yükseldiyse = paralar under'a gitti
+      const dirExpectsUnder = dirPred && dirPred.ouUnderProb > 0.60 && dirPred.count >= 5;
+
+      if (marketExpectsUnder || learnedExpectsUnder || dirExpectsUnder) {
+        const underProb   = ou25UnderProb ?? (dirPred?.ouUnderProb ?? 0.55);
+        const underLift   = +(underProb / 0.5).toFixed(2);
+        const underTier   = underProb > 0.65 || (marketExpectsUnder && learnedExpectsUnder) ? 'PREMIER' : 'STANDART';
+        const underRules  = [
+          marketExpectsUnder    ? `ou25.under=${ou25u?.toFixed(2)} ou25.over=${ou25o?.toFixed(2)}` : '',
+          learnedExpectsUnder   ? `öğrenilmiş=%${(ou25UnderProb*100).toFixed(0)} (${ou25Pat?.['UNDER25']?.count||0}x)` : '',
+          dirExpectsUnder       ? `yön-UNDER=%${(dirPred.ouUnderProb*100).toFixed(0)} (${dirPred.count}x)` : '',
+        ].filter(Boolean).join(' | ');
+
+        msSignals.push({
+          type: 'OU25_UNDER', tier: underTier,
+          rule: `[nohtft-OU25-UNDER] ${underRules}`,
+          prec: underProb > 0.65 ? 7.0 : 5.5,
+          lift: underLift, effectiveLift: underLift,
+          prob: +underProb.toFixed(3),
+          stateKey, trendStrength: 'bootstrap',
+          histCount: ou25Pat?.['UNDER25']?.count || 0,
+          accLabel: ou25UnderProb != null ? `öğrenilmiş(%${(ou25UnderProb*100).toFixed(0)})` : 'bootstrap',
+          accuracy: ou25UnderProb,
+          hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
+        });
+      }
     }
 
-    // [FIX-P2-2] OU35_OVER: aynı iki seviyeli mantık
-    const ou35  = markets?.['ou35']?.over ?? null;
+    // ── OU35 sinyalleri [V37-2: UNDER eklendi] ────────────────────
+    const ou35  = markets?.['ou35']?.over  ?? null;
+    const ou35u = markets?.['ou35']?.under ?? null;
     const ou35Available = !!(markets?.ou35?.over);
- 
+
     if (ou35Available && ou35) {
+      // OU35 OVER
       if (ou35 < OU35_STRONG_THR) {
         msSignals.push({
           type: 'OU35_OVER', tier: 'PREMIER',
           rule: `[nohtft-OU35-GÜÇLÜ] ou35.over=${ou35?.toFixed(2)} (<${OU35_STRONG_THR})`,
           prec: 7.5, lift: 1.8, effectiveLift: 1.8,
-          prob:      ou35LearnedProb ?? 0.68,
+          prob:      ou35OverProb ?? 0.68,
           stateKey, trendStrength: 'bootstrap',
           histCount: ou35Pat?.['OVER35']?.count || 0,
-          accLabel:  ou35LearnedProb != null
-            ? `öğrenilmiş(%${(ou35LearnedProb*100).toFixed(0)})`
-            : 'bootstrap',
-          accuracy:  ou35LearnedProb,
+          accLabel:  ou35OverProb != null ? `öğrenilmiş(%${(ou35OverProb*100).toFixed(0)})` : 'bootstrap',
+          accuracy:  ou35OverProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       } else if (ou35 < OU35_WEAK_THR && bttsY && bttsY < 1.70) {
@@ -1388,32 +1730,55 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
           type: 'OU35_OVER', tier: 'STANDART',
           rule: `[nohtft-OU35-ZAYIF] ou35.over=${ou35?.toFixed(2)} + btts.yes=${bttsY?.toFixed(2)}`,
           prec: 5.5, lift: 1.4, effectiveLift: 1.4,
-          prob:      ou35LearnedProb ?? 0.55,
+          prob:      ou35OverProb ?? 0.55,
           stateKey, trendStrength: 'bootstrap',
           histCount: ou35Pat?.['OVER35']?.count || 0,
-          accLabel:  ou35LearnedProb != null
-            ? `öğrenilmiş(%${(ou35LearnedProb*100).toFixed(0)})`
-            : 'bootstrap',
-          accuracy:  ou35LearnedProb,
+          accLabel:  ou35OverProb != null ? `öğrenilmiş(%${(ou35OverProb*100).toFixed(0)})` : 'bootstrap',
+          accuracy:  ou35OverProb,
+          hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
+        });
+      }
+
+      // OU35 UNDER [V37-2]
+      const ou35MarketExpectsUnder = ou35u && ou35u < UNDER_ODDS_THR && ou35 > UNDER_OVER_MIN;
+      const ou35LearnedExpectsUnder = ou35UnderProb !== null && ou35UnderProb > UNDER_LEARNED_THR;
+      const ou35DirExpectsUnder = dirPred && dirPred.ou35UnderProb && dirPred.ou35UnderProb > 0.60;
+
+      if (ou35MarketExpectsUnder || ou35LearnedExpectsUnder || ou35DirExpectsUnder) {
+        const u35Prob = ou35UnderProb ?? (dirPred?.ou35UnderProb ?? 0.55);
+        const u35Lift = +(u35Prob / 0.5).toFixed(2);
+        msSignals.push({
+          type: 'OU35_UNDER', tier: u35Prob > 0.65 ? 'PREMIER' : 'STANDART',
+          rule: `[nohtft-OU35-UNDER] ou35.under=${ou35u?.toFixed(2)} ou35.over=${ou35?.toFixed(2)}`,
+          prec: u35Prob > 0.65 ? 7.0 : 5.5,
+          lift: u35Lift, effectiveLift: u35Lift,
+          prob: +u35Prob.toFixed(3),
+          stateKey, trendStrength: 'bootstrap',
+          histCount: ou35Pat?.['UNDER35']?.count || 0,
+          accLabel: ou35UnderProb != null ? `öğrenilmiş(%${(ou35UnderProb*100).toFixed(0)})` : 'bootstrap',
+          accuracy: ou35UnderProb,
           hasHtFt: false, trapRisk: 0, similarCount: 0, decisiveMarket: null,
         });
       }
     }
-    
+
     finalSignals = msSignals;
   }
 
   const tierW = { ELITE: 3, PREMIER: 2, STANDART: 1 };
   finalSignals.sort((a, c) => (tierW[c.tier] || 0) - (tierW[a.tier] || 0) || c.effectiveLift - a.effectiveLift);
 
-  return { signals: finalSignals, features, predictions, stateKey, hasHtFt, similarMatches };
+  return {
+    signals: finalSignals, features, predictions, stateKey, hasHtFt, similarMatches,
+    dirPred, closingShocks,
+  };
 }
 
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 9 — YEREL YORUM
 // ════════════════════════════════════════════════════════════════════
 function generateLocalInterpretation(matchData) {
-  const { signals, features, predictions, stateKey, hasHtFt } = matchData;
+  const { signals, features, predictions, stateKey, hasHtFt, dirPred, closingShocks } = matchData;
   if (signals.length === 0) return null;
 
   const top = signals[0];
@@ -1426,6 +1791,28 @@ function generateLocalInterpretation(matchData) {
   else                                mkt = 'Piyasa hareketi karışık yönlü. ';
   if (f.ev_momentum  === 'falling') mkt += 'Ev FT oranları düşüyor (para girişi). ';
   if (f.dep_momentum === 'rising')  mkt += 'Dep FT oranları yükseliyor (para çıkışı). ';
+
+  // [V37-1] Market yön notu
+  let dirNote = '';
+  if (dirPred && dirPred.count >= 3) {
+    const dirs = dirPred.directions;
+    dirNote = `\n📐 Piyasa Yönü: ${describeMarketDirection(dirs)}`;
+    if (dirPred.msBest && dirPred.msProb > 0.50)
+      dirNote += ` → MS_${dirPred.msBest} beklentisi %${(dirPred.msProb*100).toFixed(0)} (${dirPred.count}x geçmiş)`;
+    if (dirPred.ouUnderProb > 0.55)
+      dirNote += ` | UNDER beklentisi %${(dirPred.ouUnderProb*100).toFixed(0)}`;
+    else if (dirPred.ouOverProb > 0.55)
+      dirNote += ` | OVER beklentisi %${(dirPred.ouOverProb*100).toFixed(0)}`;
+  }
+
+  // [V37-4] Kapanış şoku notu
+  let shockNote = '';
+  if (closingShocks && closingShocks.length > 0) {
+    const shockDesc = closingShocks.map(s =>
+      `${s.market}.${s.sub}: ${s.fromVal}→${s.toVal} (${s.pctChange > 0 ? '+' : ''}${s.pctChange}%)`
+    ).join(', ');
+    shockNote = `\n⚡ KAPANIŞ ŞOKU: ${shockDesc}`;
+  }
 
   const hist = predictions[top.type] || {};
   let note = '';
@@ -1469,7 +1856,7 @@ function generateLocalInterpretation(matchData) {
     `📊 DURUM: ${stateKey.substring(0, 55)}...\n` +
     `${mkt}\n` +
     `🎯 TAHMİN: ${top.type} | ${top.tier} | Lift: ${top.lift}x (efektif: ${top.effectiveLift}x) | Olas: %${((top.prob || 0)*100).toFixed(1)}\n` +
-    `📚 ${note}${accNote}${htFtWarning}${dropNote}${trapNote}${simNote}${decNote}\n` +
+    `📚 ${note}${accNote}${htFtWarning}${dropNote}${trapNote}${simNote}${decNote}${dirNote}${shockNote}\n` +
     `⚡ Trend: ${top.trendStrength} | İYMS21: ${r.iyms21 || 'N/A'} | MS1: ${r.ms1 || '?'}`
   );
 }
@@ -1487,17 +1874,29 @@ function logSignals(matchesWithSignals, cycleNo) {
     const top     = m.signals[0];
     const htFtTag = m.hasHtFt === false ? ' [⚠ IY/MS YOK]' : '';
     const trapTag = top.trapRisk >= 0.5 ? ` [🪤 TUZAK %${(top.trapRisk*100).toFixed(0)}]` : '';
-    console.log(`\n${tierColor[top.tier] || '⚪'} ${m.name}${htFtTag}${trapTag}`);
+    // [V37-4] Kapanış şoku etiketi
+    const shockTag = (m.closingShocks && m.closingShocks.length > 0) ? ' [⚡ KAPANIŞ-ŞOKU]' : '';
+    console.log(`\n${tierColor[top.tier] || '⚪'} ${m.name}${htFtTag}${trapTag}${shockTag}`);
     console.log(`   ⏰ ${m.h2k < 0 ? 'Başladı' : m.h2k < 1 ? Math.round(m.h2k * 60) + ' dk sonra' : m.h2k.toFixed(1) + ' saat sonra'}`);
     console.log(`   📈 Ev kümülâtif: ${m.ev_ft_cum.toFixed(2)} | Dep: ${m.dep_ft_cum.toFixed(2)}`);
     if (top.similarCount > 0)
       console.log(`   🔍 Benzer geçmiş maç: ${top.similarCount} | Belirleyici: ${top.decisiveMarket?.market || 'yok'}`);
+
+    // [V37-1] Market yönü özeti
+    if (m.dirPred && m.dirPred.count >= 3) {
+      const dirs = m.dirPred.directions;
+      const ms1d = dirs?.['1x2']?.home || '?';
+      const ou25d = dirs?.['ou25']?.over || '?';
+      console.log(`   📐 Piyasa Yönü: ms1=${ms1d} | ou25.over=${ou25d} | geçmiş=${m.dirPred.count}x`);
+    }
+
     for (const s of m.signals.slice(0, 3)) {
       const accStr = s.accuracy !== null && s.accuracy !== undefined
         ? ` | Doğruluk: %${(s.accuracy*100).toFixed(0)} (${s.accLabel})`
         : ` | Doğruluk: veri bekleniyor`;
+      const shockStr = s.closingShock ? ' ⚡' : '';
       console.log(
-        `   ${tierColor[s.tier]} [${s.tier}] ${s.type}` +
+        `   ${tierColor[s.tier]} [${s.tier}] ${s.type}${shockStr}` +
         ` | Lift: ${s.lift}x → Efektif: ${s.effectiveLift}x` +
         ` | Olas: %${(s.prob*100).toFixed(1)}${accStr}`
       );
@@ -1577,14 +1976,14 @@ function calcHtFtResult(htHome, htAway, ftHome, ftAway) {
 async function syncLiveMatches() {
   if (!sb) return;
 
-  // [FIX-P1-2] Staleness timeout: skor gelmeyen bekleyen sinyalleri iptal et
+  // [FIX-P1-2] Staleness timeout
   const nowMs = Date.now();
   let expiredCount = 0;
   for (const [fid, pending] of Object.entries(memory.pendingSignals)) {
     if (!pending.predictedAt) continue;
     const ageH = (nowMs - new Date(pending.predictedAt).getTime()) / 3600000;
     if (ageH > MAX_PENDING_AGE_H) {
-      console.warn(`[PendingTimeout] fixture=${fid} ${ageH.toFixed(1)}sa beklendi, skor gelmedi — iptal (sinyal: ${pending.topSignal})`);
+      console.warn(`[PendingTimeout] fixture=${fid} ${ageH.toFixed(1)}sa beklendi — iptal (sinyal: ${pending.topSignal})`);
       delete memory.pendingSignals[fid];
       expiredCount++;
     }
@@ -1680,8 +2079,8 @@ async function runCycle() {
   console.log(`[Tracker] Döngü #${cycleCount} | ${new Date().toISOString()} | +${elapsed}dk`);
   console.log(`[Memory]  ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} öğrenme${bootstrapMode ? ` | ⚡ BOOTSTRAP (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD})` : ''}`);
   console.log(`[Accuracy] ${Object.keys(memory.signalAccuracy).length} tip | ${Object.keys(memory.pendingSignals).length} bekleyen`);
-  console.log(`[Trap/Sim] ${Object.keys(memory.trapPatterns).length} tuzak pattern | ${memory.matchHistory.length} maç geçmişi`);
-  console.log(`[Config]  Sinyal penceresi: ≤${SIGNAL_WINDOW_H*60}dk | Lookahead: ${LOOKAHEAD_H}sa`);
+  console.log(`[Trap/Sim] ${Object.keys(memory.trapPatterns).length} tuzak | ${memory.matchHistory.length} geçmiş | ${Object.keys(memory.marketDirectionPatterns).length} yön pattern`);
+  console.log(`[Config]  Sinyal penceresi: ≤${SIGNAL_WINDOW_H*60}dk | Lookahead: ${LOOKAHEAD_H}sa | Trivial eşik: <${TRIVIAL_ODDS_THR}`);
   console.log('═'.repeat(60));
 
   if (cycleCount % 10 === 1) {
@@ -1716,35 +2115,49 @@ async function runCycle() {
     const prev     = matchCache.get(fid);
     const changes  = prev?.latestMarkets ? calcDelta(prev.latestMarkets, currMarkets) : {};
 
-    // [FIX-P1-1] calcMoneyFlow — IY/MS yoksa 1x2 delta proxy kullanır
     const { ev_ft, dep_ft } = calcMoneyFlow(currMarkets, changes);
     const ev_ft_cum  = (prev?.ev_ft_cum  || 0) + (ev_ft  < 0 ? ev_ft  : 0);
     const dep_ft_cum = (prev?.dep_ft_cum || 0) + (dep_ft < 0 ? dep_ft : 0);
 
     const snapshots = prev?.snapshots || [];
 
-    // [FIX-P0-2] Rapid-fire snapshot guard
-    // Son snapshot'dan bu yana en az MIN_SNAP_INTERVAL_MS geçmeli
-    const lastSnapTime = snapshots.length > 0
+    // [FIX-P0-2 + V37-4] Rapid-fire guard — kapanış şoku override
+    const lastSnapTime      = snapshots.length > 0
       ? new Date(snapshots[snapshots.length - 1].time).getTime()
       : 0;
     const timeSinceLastSnap = Date.now() - lastSnapTime;
 
-    if (timeSinceLastSnap >= MIN_SNAP_INTERVAL_MS) {
-      // Normal: yeni snapshot ekle
-      snapshots.push({ time: new Date().toISOString(), markets: currMarkets, changes, ev_ft, dep_ft });
+    // Kapanış şoku tespiti (rapid-fire bypass için)
+    let isShock = false;
+    if (prev?.latestMarkets && timeSinceLastSnap < MIN_SNAP_INTERVAL_MS) {
+      const shockPairs = [
+        ['1x2', 'home'], ['1x2', 'away'], ['ou25', 'over'], ['ou25', 'under'],
+      ];
+      for (const [mkt, sub] of shockPairs) {
+        const prevVal = prev.latestMarkets?.[mkt]?.[sub];
+        const currVal = currMarkets?.[mkt]?.[sub];
+        if (prevVal && currVal && prevVal !== 0) {
+          if (Math.abs((currVal - prevVal) / prevVal) >= CLOSING_SHOCK_THR) {
+            isShock = true;
+            console.log(`[V37-4] ⚡ KAPANIŞ ŞOKU: ${fix.home_team} vs ${fix.away_team} | ${mkt}.${sub}: ${prevVal?.toFixed(2)}→${currVal?.toFixed(2)}`);
+            break;
+          }
+        }
+      }
+    }
+
+    if (timeSinceLastSnap >= MIN_SNAP_INTERVAL_MS || isShock) {
+      snapshots.push({
+        time: new Date().toISOString(),
+        markets: currMarkets, changes, ev_ft, dep_ft,
+        isShock,
+      });
       if (snapshots.length > 10) snapshots.shift();
     } else {
-      // Rapid-fire: sadece son snapshot'u güncelle (zaman damgasını koru, oranları güncelle)
       if (snapshots.length > 0) {
         const lastSnap = snapshots[snapshots.length - 1];
         snapshots[snapshots.length - 1] = {
-          ...lastSnap,
-          markets: currMarkets,
-          changes,
-          ev_ft,
-          dep_ft,
-          // _stateKey silinmez — bir sonraki evaluateSmartSignals güncelleyecek
+          ...lastSnap, markets: currMarkets, changes, ev_ft, dep_ft,
         };
       } else {
         snapshots.push({ time: new Date().toISOString(), markets: currMarkets, changes, ev_ft, dep_ft });
@@ -1758,11 +2171,12 @@ async function runCycle() {
       prev?.closingMarkets || currMarkets,
     );
 
-    const { signals, features, predictions, stateKey, hasHtFt, similarMatches } = evaluateSmartSignals(
-      currMarkets, changes, { ev_ft_cum, dep_ft_cum }, snapshots,
-      prev?.openingMarkets,
-      fingerprint
-    );
+    const { signals, features, predictions, stateKey, hasHtFt, similarMatches, dirPred, closingShocks } =
+      evaluateSmartSignals(
+        currMarkets, changes, { ev_ft_cum, dep_ft_cum }, snapshots,
+        prev?.openingMarkets,
+        fingerprint
+      );
 
     matchCache.set(fid, {
       name:           `${fix.home_team} vs ${fix.away_team}`,
@@ -1788,7 +2202,10 @@ async function runCycle() {
     const topLabel  = `${topSignal.type}_${topSignal.tier}`;
     if (alreadyFired(fid, topLabel)) continue;
 
-    const interpretation = generateLocalInterpretation({ signals, features, predictions, stateKey, hasHtFt });
+    const interpretation = generateLocalInterpretation({
+      signals, features, predictions, stateKey, hasHtFt,
+      dirPred, closingShocks, // [V37-1/V37-4]
+    });
 
     matchesWithSignals.push({
       fid, name: `${fix.home_team} vs ${fix.away_team}`,
@@ -1796,6 +2213,7 @@ async function runCycle() {
       signals, features, interpretation,
       ev_ft_cum, dep_ft_cum,
       hasHtFt, similarMatches,
+      dirPred, closingShocks, // [V37-1/V37-4]
     });
   }
 
@@ -1822,22 +2240,22 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v3.6-fixed — Analiz Bulguları Fix     ║');
+  console.log('║  ScorePop Adaptive v3.7 — Market Direction + UNDER Fix  ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
   console.log(`║  Bootstrap eşiği   : ${String(BOOTSTRAP_THRESHOLD).padEnd(36)}║`);
   console.log(`║  Sinyal penceresi  : ≤${String(Math.round(SIGNAL_WINDOW_H*60)+'dk').padEnd(35)}║`);
-  console.log(`║  Snap min aralık   : ${String(MIN_SNAP_INTERVAL_MS/60000+'dk').padEnd(36)}║`);
-  console.log(`║  Pending timeout   : ${String(MAX_PENDING_AGE_H+'sa').padEnd(36)}║`);
-  console.log(`║  OU25 güçlü eşik  : <${String(OU25_STRONG_THR).padEnd(35)}║`);
-  console.log(`║  OU25 zayıf eşik  : <${String(OU25_WEAK_THR+' (+btts<1.70 koşulu)').padEnd(35)}║`);
+  console.log(`║  Trivial oran eşiği: <${String(TRIVIAL_ODDS_THR).padEnd(35)}║`);
+  console.log(`║  UNDER odds eşiği  : <${String(UNDER_ODDS_THR+' (ou25.under)').padEnd(35)}║`);
+  console.log(`║  UNDER öğrenme thr : >%${String((UNDER_LEARNED_THR*100).toFixed(0)+' pattern beklentisi').padEnd(34)}║`);
+  console.log(`║  Kapanış şok eşiği : %${String((CLOSING_SHOCK_THR*100).toFixed(0)+' hareket → bypass').padEnd(34)}║`);
   console.log('║  ─────────────────────────────────────────────────────  ║');
-  console.log('║  [FIX-P0-1] Cache migration: eski stateKey temizleme    ║');
-  console.log('║  [FIX-P0-2] Rapid-fire snapshot guard (4dk min aralık)  ║');
-  console.log('║  [FIX-P1-1] calcMoneyFlow: 1x2 delta proxy (nohtft)     ║');
-  console.log('║  [FIX-P1-2] Pending staleness timeout (8sa)             ║');
-  console.log('║  [FIX-P2-1] nohtft stateKey 7-parça (btts+iy1 eklendi) ║');
-  console.log('║  [FIX-P2-2] OU25/OU35 iki seviyeli eşik (1.35/1.50)    ║');
-  console.log('║  [FIX-P2-3] ou25/ou35 null guard                        ║');
+  console.log('║  [V37-1] Market Direction Engine (Bölüm 0.7)           ║');
+  console.log('║  [V37-2] OU25_UNDER + OU35_UNDER sinyal üretimi        ║');
+  console.log('║  [V37-3] Trivial oran filtresi (ms1/ms2 < 1.22)        ║');
+  console.log('║  [V37-4] Kapanış şoku tespiti + snapshot override      ║');
+  console.log('║  [V37-5] nohtft stateKey 8-parça (ms1dir eklendi)      ║');
+  console.log('║  [V37-6] learnMarketDirectionOutcome entegrasyonu       ║');
+  console.log('║  [FIX-P0..P3] v3.6 düzeltmeleri korundu               ║');
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
@@ -1866,6 +2284,7 @@ async function main() {
   console.log(`║  Pattern       : ${String(Object.keys(memory.patterns).length).padEnd(40)}║`);
   console.log(`║  Öğrenilen     : ${String(memory.totalLearned).padEnd(40)}║`);
   console.log(`║  Tuzak Pattern : ${String(Object.keys(memory.trapPatterns).length).padEnd(40)}║`);
+  console.log(`║  Yön Pattern   : ${String(Object.keys(memory.marketDirectionPatterns).length).padEnd(40)}║`);
   console.log(`║  Maç Geçmişi   : ${String(memory.matchHistory.length).padEnd(40)}║`);
   console.log(`║  Sinyal Tipi   : ${String(Object.keys(memory.signalAccuracy).length).padEnd(40)}║`);
   console.log(`║  Bekleyen      : ${String(Object.keys(memory.pendingSignals).length).padEnd(40)}║`);
