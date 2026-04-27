@@ -75,7 +75,7 @@ const OU35_STRONG_THR = 1.35;
 const OU35_WEAK_THR   = 1.50;
 
 // [V37-3] Trivial sinyal eşiği — bu altında MS_1/MS_2 üretilmez
-const TRIVIAL_ODDS_THR = 1.22;
+const TRIVIAL_ODDS_THR = 1.30;
 
 // [V37-4] Closing shock eşiği — son 15dk %10+ hareket
 const CLOSING_SHOCK_THR = 0.10;
@@ -85,7 +85,7 @@ const DIR_STRONG_THR = 0.08; // %8+ hareket = "strong"
 const DIR_NORMAL_THR = 0.03; // %3-8 = "normal"
 
 // [V37-2] UNDER sinyal koşulları
-const UNDER_ODDS_THR   = 1.60; // ou25.under bu altında → under sinyali
+const UNDER_ODDS_THR   = 1.45; // ou25.under bu altında → under sinyali
 const UNDER_OVER_MIN   = 1.80; // ou25.over bu üstünde → under sinyali
 const UNDER_LEARNED_THR = 0.55; // öğrenilmiş prob bu üstünde → under sinyali
 
@@ -1451,15 +1451,15 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       });
     };
 
-    if (raw.iyms21 && raw.iyms21 <= 30 && depCum <= -0.5)
+    if (raw.iyms21 && raw.iyms21 <= 22 && depCum <= -1.5)
       bsPush('2/1', `İYMS21=${raw.iyms21?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.5, 0.15);
-    if (raw.iyms21 && raw.iyms21 <= 30 && evCum <= -0.5)
+    if (raw.iyms21 && raw.iyms21 <= 22 && evCum <= -1.5)
       bsPush('X/1', `İYMS21=${raw.iyms21?.toFixed(1)} ev_cum=${evCum.toFixed(2)}`, 5.0, 1.4, 0.14);
-    if (raw.ms1 && raw.ms1 <= 1.60 && evCum <= -0.5)
+    if (raw.ms1 && raw.ms1 <= 1.55 && evCum <= -0.5)
       bsPush('1/1', `MS1=${raw.ms1?.toFixed(2)} ev_cum=${evCum.toFixed(2)}`, 5.0, 1.4, 0.14);
-    if (raw.iyms22 && raw.iyms22 <= 10 && depCum <= -0.5)
+    if (raw.iyms22 && raw.iyms22 <= 5 && depCum <= -0.5)
       bsPush('2/2', `İYMS22=${raw.iyms22?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.4, 0.14);
-    if (raw.iyms12 && raw.iyms12 <= 30 && depCum <= -0.5)
+    if (raw.iyms12 && raw.iyms12 <= 22 && depCum <= -0.5)
       bsPush('1/2', `İYMS12=${raw.iyms12?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.4, 0.14);
     if (raw.ms1 && raw.ms1 >= 2.00 && raw.ms2 && raw.ms2 >= 2.00 && Math.abs(evCum) <= 0.2 && Math.abs(depCum) <= 0.2)
       bsPush('X/X', `MS1=${raw.ms1?.toFixed(2)} MS2=${raw.ms2?.toFixed(2)} hareket=düşük`, 4.5, 1.3, 0.12);
