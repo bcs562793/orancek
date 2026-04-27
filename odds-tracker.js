@@ -98,7 +98,7 @@ const FOCUS_RESULTS = ['1/1', '2/1', '1/X', '2/X', 'X/X', 'X/2', 'X/1', '2/2', '
 // ════════════════════════════════════════════════════════════════════
 const EXPLORE_RATE = 0.0;
 
-function resolvePendingSignal(fid, actualResult) {
+function resolvePendingSignal(fid, actualResult, scoreData = null) {
   const pending = memory.pendingSignals[fid];
   if (!pending) return;
   const { topSignal, tier } = pending;
@@ -111,11 +111,22 @@ function resolvePendingSignal(fid, actualResult) {
     const msPart   = topSignal.split('_')[1];
     const actualMs = actualResult.split('/')[1];
     isCorrect = msPart === actualMs;
-  } else if (topSignal === 'OU25_OVER' || topSignal === 'OU35_OVER') {
-    isCorrect = null;
+  } else if (topSignal === 'OU25_OVER') {
+    if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
+      isCorrect = (scoreData.ftHome + scoreData.ftAway) > 2.5;
+    } else {
+      isCorrect = null;
+    }
+  } else if (topSignal === 'OU35_OVER') {
+    if (scoreData?.ftHome != null && scoreData?.ftAway != null) {
+      isCorrect = (scoreData.ftHome + scoreData.ftAway) > 3.5;
+    } else {
+      isCorrect = null;
+    }
   } else {
     isCorrect = topSignal === actualResult;
   }
+
   if (isCorrect === null) {
     delete memory.pendingSignals[fid];
     return;
@@ -1571,7 +1582,7 @@ async function syncLiveMatches() {
       );
       if (htFtResult) {
         if (!prevLive.htFtResult) {
-          resolvePendingSignal(fid, htFtResult);
+          resolvePendingSignal(fid, htFtResult, { ftHome, ftAway });
           resolvedCount++;
           learnFromMatch(fid, htFtResult);
           learnedCount++;
