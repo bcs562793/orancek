@@ -1821,6 +1821,9 @@
     "MS_1_PREMIER",
     "MS_1_STANDART"
   ],
+  "2830849": [
+    "OU25_OVER_STANDART"
+  ],
   "2830852": [
     "OU25_OVER_PREMIER"
   ],
@@ -1830,10 +1833,16 @@
   "2830913": [
     "OU35_OVER_STANDART"
   ],
+  "2830942": [
+    "OU25_OVER_STANDART"
+  ],
   "2830956": [
     "2/2_STANDART"
   ],
   "2830971": [
+    "OU25_OVER_STANDART"
+  ],
+  "2831000": [
     "OU25_OVER_STANDART"
   ],
   "2831005": [
@@ -1864,6 +1873,9 @@
   ],
   "2831160": [
     "MS_1_STANDART"
+  ],
+  "2831168": [
+    "OU25_OVER_STANDART"
   ],
   "2831203": [
     "2/2_PREMIER",
