@@ -1834,7 +1834,8 @@
     "OU35_OVER_STANDART"
   ],
   "2830942": [
-    "OU25_OVER_STANDART"
+    "OU25_OVER_STANDART",
+    "OU35_UNDER_STANDART"
   ],
   "2830956": [
     "2/2_STANDART"
@@ -1856,6 +1857,9 @@
   ],
   "2831041": [
     "2/1_STANDART"
+  ],
+  "2831052": [
+    "OU35_UNDER_STANDART"
   ],
   "2831059": [
     "OU25_OVER_PREMIER",
@@ -3457,5 +3461,8 @@
   ],
   "2910783": [
     "X/X_STANDART"
+  ],
+  "2915215": [
+    "2/2_STANDART"
   ]
 }
