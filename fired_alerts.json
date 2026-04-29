@@ -1913,6 +1913,9 @@
   "2831005": [
     "2/1_STANDART"
   ],
+  "2831012": [
+    "OU35_UNDER_STANDART"
+  ],
   "2831023": [
     "MS_1_STANDART"
   ],
@@ -1999,6 +2002,9 @@
   "2831322": [
     "OU25_OVER_STANDART"
   ],
+  "2831323": [
+    "OU35_UNDER_PREMIER"
+  ],
   "2831327": [
     "2/2_STANDART",
     "OU35_UNDER_STANDART"
@@ -2013,6 +2019,9 @@
   ],
   "2831369": [
     "OU25_UNDER_STANDART"
+  ],
+  "2831371": [
+    "OU35_UNDER_STANDART"
   ],
   "2831383": [
     "OU35_OVER_STANDART"
