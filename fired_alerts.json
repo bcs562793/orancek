@@ -2209,6 +2209,9 @@
   "2833192": [
     "1/1_STANDART"
   ],
+  "2834048": [
+    "OU25_UNDER_PREMIER"
+  ],
   "2837096": [
     "1/1_STANDART"
   ],
@@ -3793,7 +3796,8 @@
     "X/X_STANDART"
   ],
   "2911778": [
-    "OU25_UNDER_PREMIER"
+    "OU25_UNDER_PREMIER",
+    "OU25_UNDER_STANDART"
   ],
   "2912920": [
     "2/2_STANDART"
