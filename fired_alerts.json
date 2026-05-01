@@ -2319,6 +2319,9 @@
   "2831471": [
     "OU25_OVER_PREMIER"
   ],
+  "2831475": [
+    "OU25_OVER_STANDART"
+  ],
   "2831477": [
     "OU25_OVER_PREMIER"
   ],
@@ -4362,6 +4365,9 @@
   ],
   "2920690": [
     "OU35_UNDER_PREMIER"
+  ],
+  "2920692": [
+    "OU25_OVER_STANDART"
   ],
   "2920693": [
     "1/1_ELITE",
