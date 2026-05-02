@@ -2421,6 +2421,9 @@
   "2833192": [
     "1/1_STANDART"
   ],
+  "2833203": [
+    "2/2_STANDART"
+  ],
   "2833210": [
     "2/2_STANDART"
   ],
@@ -2598,6 +2601,9 @@
     "OU25_UNDER_PREMIER",
     "OU35_UNDER_STANDART"
   ],
+  "2833539": [
+    "OU25_UNDER_STANDART"
+  ],
   "2833540": [
     "2/2_STANDART"
   ],
@@ -2617,6 +2623,9 @@
     "2/1_STANDART",
     "1/1_STANDART",
     "1/1_PREMIER"
+  ],
+  "2833557": [
+    "2/2_STANDART"
   ],
   "2833559": [
     "OU35_UNDER_PREMIER"
@@ -3199,7 +3208,8 @@
     "1/1_ELITE"
   ],
   "2834696": [
-    "OU25_OVER_STANDART"
+    "OU25_OVER_STANDART",
+    "OU25_UNDER_PREMIER"
   ],
   "2834701": [
     "2/2_STANDART"
@@ -3282,9 +3292,15 @@
   "2837468": [
     "1/1_STANDART"
   ],
+  "2837479": [
+    "1/1_STANDART"
+  ],
   "2837494": [
     "OU35_UNDER_STANDART",
     "OU35_UNDER_PREMIER"
+  ],
+  "2837518": [
+    "2/1_STANDART"
   ],
   "2837525": [
     "OU25_UNDER_STANDART"
@@ -3308,6 +3324,9 @@
   ],
   "2837794": [
     "MS_1_STANDART"
+  ],
+  "2837799": [
+    "2/2_STANDART"
   ],
   "2837815": [
     "OU25_UNDER_STANDART",
@@ -3379,6 +3398,9 @@
   ],
   "2838389": [
     "OU35_UNDER_STANDART"
+  ],
+  "2838402": [
+    "OU35_OVER_STANDART"
   ],
   "2838405": [
     "OU35_OVER_STANDART"
@@ -3857,7 +3879,8 @@
     "X/X_STANDART"
   ],
   "2883673": [
-    "OU25_UNDER_PREMIER"
+    "OU25_UNDER_PREMIER",
+    "OU25_UNDER_STANDART"
   ],
   "2886158": [
     "X/2_STANDART"
