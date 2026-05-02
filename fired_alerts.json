@@ -2542,6 +2542,9 @@
   "2834412": [
     "MS_1_STANDART"
   ],
+  "2834438": [
+    "OU25_OVER_STANDART"
+  ],
   "2834455": [
     "OU35_UNDER_PREMIER"
   ],
@@ -4676,5 +4679,8 @@
   "2923278": [
     "OU35_UNDER_STANDART",
     "OU35_UNDER_PREMIER"
+  ],
+  "2923280": [
+    "OU25_UNDER_STANDART"
   ]
 }
