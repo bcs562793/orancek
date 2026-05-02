@@ -2457,6 +2457,9 @@
   "2833255": [
     "OU35_UNDER_PREMIER"
   ],
+  "2833256": [
+    "OU35_UNDER_STANDART"
+  ],
   "2833265": [
     "OU25_OVER_STANDART",
     "OU25_UNDER_PREMIER"
@@ -2555,9 +2558,15 @@
     "OU25_UNDER_STANDART",
     "OU25_UNDER_PREMIER"
   ],
+  "2833454": [
+    "OU35_UNDER_PREMIER"
+  ],
   "2833459": [
     "OU25_UNDER_PREMIER",
     "OU25_OVER_STANDART"
+  ],
+  "2833462": [
+    "2/2_STANDART"
   ],
   "2833463": [
     "2/2_STANDART"
@@ -2677,6 +2686,9 @@
     "OU25_OVER_PREMIER",
     "OU35_UNDER_PREMIER"
   ],
+  "2833624": [
+    "OU35_UNDER_PREMIER"
+  ],
   "2833635": [
     "OU25_UNDER_STANDART",
     "OU25_UNDER_PREMIER"
@@ -2697,6 +2709,9 @@
   ],
   "2833650": [
     "OU35_UNDER_STANDART"
+  ],
+  "2833659": [
+    "1/1_PREMIER"
   ],
   "2833660": [
     "OU35_UNDER_STANDART"
@@ -2745,6 +2760,9 @@
   ],
   "2833770": [
     "OU35_UNDER_STANDART",
+    "OU35_UNDER_PREMIER"
+  ],
+  "2833774": [
     "OU35_UNDER_PREMIER"
   ],
   "2833790": [
@@ -2969,6 +2987,9 @@
   "2834168": [
     "2/1_STANDART"
   ],
+  "2834175": [
+    "OU25_OVER_PREMIER"
+  ],
   "2834176": [
     "OU35_UNDER_PREMIER",
     "OU35_UNDER_STANDART"
@@ -3035,6 +3056,9 @@
     "OU35_UNDER_STANDART",
     "OU25_OVER_STANDART"
   ],
+  "2834287": [
+    "2/2_STANDART"
+  ],
   "2834309": [
     "OU35_UNDER_PREMIER",
     "OU25_OVER_STANDART"
@@ -3083,6 +3107,9 @@
   ],
   "2834401": [
     "OU25_OVER_PREMIER"
+  ],
+  "2834402": [
+    "2/1_STANDART"
   ],
   "2834403": [
     "OU25_OVER_STANDART"
@@ -3151,6 +3178,9 @@
   ],
   "2834540": [
     "OU25_OVER_PREMIER"
+  ],
+  "2834548": [
+    "OU35_UNDER_PREMIER"
   ],
   "2834551": [
     "OU35_UNDER_STANDART",
@@ -3245,6 +3275,9 @@
   "2834714": [
     "OU25_OVER_PREMIER",
     "OU35_UNDER_PREMIER"
+  ],
+  "2834722": [
+    "2/2_STANDART"
   ],
   "2834728": [
     "OU35_UNDER_PREMIER"
@@ -5234,7 +5267,8 @@
     "OU35_UNDER_PREMIER"
   ],
   "2905589": [
-    "OU35_UNDER_STANDART"
+    "OU35_UNDER_STANDART",
+    "OU25_UNDER_STANDART"
   ],
   "2905591": [
     "OU35_OVER_STANDART"
@@ -5458,6 +5492,9 @@
   "2916440": [
     "OU35_UNDER_STANDART"
   ],
+  "2916441": [
+    "1/1_STANDART"
+  ],
   "2916442": [
     "OU35_UNDER_STANDART",
     "OU35_UNDER_PREMIER"
@@ -5500,6 +5537,9 @@
   "2919637": [
     "OU35_UNDER_STANDART",
     "OU35_UNDER_PREMIER"
+  ],
+  "2919699": [
+    "2/2_STANDART"
   ],
   "2919976": [
     "OU25_OVER_STANDART"
