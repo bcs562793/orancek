@@ -6154,6 +6154,9 @@
   "2925192": [
     "OU25_OVER_STANDART"
   ],
+  "4290773": [
+    "X/1_STANDART"
+  ],
   "4306222": [
     "OU25_UNDER_PREMIER"
   ],
@@ -6326,7 +6329,8 @@
   ],
   "4442706": [
     "OU35_UNDER_PREMIER",
-    "OU35_UNDER_STANDART"
+    "OU35_UNDER_STANDART",
+    "OU25_UNDER_STANDART"
   ],
   "4445954": [
     "OU25_UNDER_STANDART"
