@@ -135,6 +135,21 @@ const ZIGZAG_MIN_CHANGES = 2;   // bu kadar yön değişimi = zig-zag
 const ZIGZAG_MILD_FACTOR  = 0.90; // 2 değişim
 const ZIGZAG_STRONG_FACTOR = 0.85; // 3+ değişim
 
+// ── ML Tahmin Entegrasyonu [V39-ML] ──────────────────────────────────
+let mlPredictions = {};
+
+function loadMlPredictions() {
+  try {
+    const raw = fs.readFileSync('ml_predictions.json', 'utf8');
+    mlPredictions = JSON.parse(raw);
+    const cnt = Object.keys(mlPredictions.stateKeyLookup || {}).length;
+    console.log(`[ML] ${cnt} pattern yüklendi | model: ${mlPredictions.meta?.model}`);
+  } catch (e) {
+    // İlk çalıştırmada ml_predictions.json yoktur, sorun değil
+    mlPredictions = {};
+  }
+}
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
