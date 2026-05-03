@@ -1812,6 +1812,9 @@ async function runCycle() {
   console.log(`[V38]     CompThr:${COMPRESSION_THR} (factor:${COMPRESSION_FACTOR}) | ZigZag:mild${ZIGZAG_MILD_FACTOR}/strong${ZIGZAG_STRONG_FACTOR}`);
   console.log('═'.repeat(60));
 
+  // [V39-ML] Her 20 döngüde ML tahminlerini güncelle
+  if (cycleCount % 20 === 0) loadMlPredictions();
+
   if (cycleCount%10===1) {
     logAccuracyReport(); logTrapReport();
     if (memory.totalLearned>=10) analyzeFeatureImportance();
