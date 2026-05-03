@@ -765,6 +765,7 @@ function loadCache() {
     if (!isHtFtFormat && !isNoHtFtFormat) { delete memory.pendingSignals[fid]; stalePending++; }
   }
   if (stalePending > 0) console.log(`[Fix-C] ${stalePending} eski format pendingSignal temizlendi.`);
+  loadMlPredictions();
 }
 
 function saveCache() {
