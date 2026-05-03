@@ -1533,6 +1533,45 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     finalSignals = msSignals;
   }
 
+  // ── [V39-ML] XGBoost Sinyal Entegrasyonu ─────────────────────────
+  const mlPred = mlPredictions?.stateKeyLookup?.[stateKey] || null;
+  if (mlPred && mlPred._best9Prob >= 0.38) {
+    const mlOutcome  = mlPred._best9;
+    const mlProb     = mlPred._best9Prob;
+    const mlLift     = +(mlProb / (1/9)).toFixed(2);
+    const mlExisting = finalSignals.find(s => s.type === mlOutcome);
+
+    if (mlExisting) {
+      // Aynı tahmin zaten varsa sadece lift'ini artır
+      const boost = Math.min(1.20, 1.0 + (mlProb - 0.38) * 1.5);
+      mlExisting.effectiveLift = +(mlExisting.effectiveLift * boost).toFixed(2);
+      mlExisting.rule = `[ML-boost×${boost.toFixed(2)}] ` + mlExisting.rule;
+    } else if (mlLift >= 1.5) {
+      // Yeni ML sinyali ekle
+      finalSignals.push({
+        type:          mlOutcome,
+        tier:          mlProb >= 0.50 ? 'PREMIER' : 'STANDART',
+        rule:          `[ML-${mlPred._model}] prob=${mlProb} n=${mlPred._sampleCnt} stateKey=${stateKey.substring(0,35)}`,
+        prec:          +(mlProb * 10).toFixed(2),
+        lift:          mlLift,
+        effectiveLift: mlLift,
+        prob:          mlProb,
+        stateKey,
+        trendStrength: 'ml_model',
+        histCount:     mlPred._sampleCnt || 0,
+        accLabel:      `ML-%${(mlProb*100).toFixed(0)}`,
+        accuracy:      mlProb,
+        hasHtFt,
+        trapRisk:      0,
+        similarCount:  0,
+        decisiveMarket: null,
+        isMLSignal:    true,
+      });
+    }
+    console.log(`[ML] ${stateKey.substring(0,40)} → ${mlOutcome} (%${(mlProb*100).toFixed(0)}) ${mlExisting ? 'BOOST' : 'YENİ SİNYAL'}`);
+  }
+  // ─────────────────────────────────────────────────────────────────
+
   const tierW={ELITE:3,PREMIER:2,STANDART:1};
   finalSignals.sort((a,c) => (tierW[c.tier]||0)-(tierW[a.tier]||0) || c.effectiveLift-a.effectiveLift);
 
