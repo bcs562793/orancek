@@ -49,7 +49,7 @@ jobs:
 
       # ── 3. Bağımlılıklar ───────────────────────────────────────────
       - name: Install dependencies
-        run: npm install && npm install @supabase/supabase-js
+        run: npm install && npm install @supabase/supabase-js ws
 
       # ── 4. Cache geri yükle ────────────────────────────────────────
       # Önceki oturumun piyasa snapshot'larını, alarmlarını ve ÖĞRENME HAFIZASINI yükle
@@ -63,6 +63,9 @@ jobs:
           key: scorepop-cache-${{ github.run_id }}
           restore-keys: |
             scorepop-cache-
+            
+      - name: Gerekli Paketleri Kur
+        run: npm install ws @supabase/supabase-js      
 
       # ── 5. Tracker'ı çalıştır ──────────────────────────────────────
       - name: Run AI Tracker
