@@ -150,9 +150,20 @@ function loadMlPredictions() {
   }
 }
 
+const WebSocket = require('ws'); // ws paketini içeri aktar
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+// createClient fonksiyonuna ekstra ayarlar (options) ekliyoruz
+const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession: false // Sunucu ortamlarında (backend scriptleri) session kaydetmeye gerek yoktur
+  },
+  global: {
+    WebSocket: WebSocket // Eksik olan WebSocket desteğini burada Supabase'e sağlıyoruz
+  }
+}) : null;
 
 // ── State ─────────────────────────────────────────────────────────────
 const matchCache = new Map();
