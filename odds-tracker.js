@@ -158,10 +158,11 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 // createClient fonksiyonuna ekstra ayarlar (options) ekliyoruz
 const sb = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
-    persistSession: false // Sunucu ortamlarında (backend scriptleri) session kaydetmeye gerek yoktur
+    persistSession: false
   },
-  global: {
-    WebSocket: WebSocket // Eksik olan WebSocket desteğini burada Supabase'e sağlıyoruz
+  // ÇÖZÜM BURADA: "global" yerine "realtime" ayarının içine "transport" olarak ekliyoruz
+  realtime: {
+    transport: WebSocket
   }
 }) : null;
 
