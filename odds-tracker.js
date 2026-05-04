@@ -1714,7 +1714,7 @@ function checkAndRunAutonomousMaintenance() {
 async function runCycle() {
   cycleCount++;
   
-  checkAndRunAutonomousMaintenance(); // [V4.0] Otonom bakım kontrolü
+  //checkAndRunAutonomousMaintenance(); // [V4.0] Otonom bakım kontrolü
 
   const elapsed=Math.round((Date.now()-startTime)/60000);
   const bootstrapMode=memory.totalLearned<BOOTSTRAP_THRESHOLD;
