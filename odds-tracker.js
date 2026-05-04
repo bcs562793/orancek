@@ -1,18 +1,62 @@
 /**
- * ai_tracker.js — ScorePop Adaptive Tracker v4.0 (Otonom AI Güncellemesi)
+ * ai_tracker.js — ScorePop Adaptive Tracker v3.8
  * ═══════════════════════════════════════════════════════════════════
- * v4.0 Otonom Değişiklikleri:
+ * v3.8 değişiklikleri (v3.7 üzerine — 3096 maçlık cache analizi bulgularına göre):
  *
- * [V40-1] Dinamik Konfigürasyon: Sabit eşikler (TRIVIAL_ODDS_THR, EXPLORE_RATE vb.) 
- * dynamicConfig nesnesine taşındı ve kendi kendini güncelleyebilir hale getirildi.
- * [V40-2] Gölge Keşif (Exploration): %10 ihtimalle sınırda kalan maçlar "Gölge Sinyal" 
- * olarak sisteme alınıp yapay zekanın yeni taktikler keşfetmesi sağlandı.
- * [V40-3] Time-Decay (Zamanla Sönümleme): Hafızadaki pattern'lar 90 günden eskiyse 
- * güven skorları (lift) yaşlarına oranla zayıflatıldı (Concept Drift tespiti).
- * [V40-4] Otonom Bakım: Her Pazar gecesi 03:00'da Python (XGBoost) betiğini tetikleyen
- * ve kendi zekasını/eşiklerini (Online Learning) güncelleyen motor eklendi.
+ * [V38-1] TRIVIAL_ODDS_THR: 1.30 → 1.40 (VERİ BAZLI):
+ *   • ms1 1.40-1.50 aralığı cache'de %48.8 ev win = random seviye
+ *   • ms1 1.20-1.30 aralığı %67.1 → 1.40 altı hâlâ anlamlı sinyal üretir
+ *   • Eşik 1.40'a çekildi, bu aralıktaki sinyaller bastırılır
  *
- * v3.8'den korunanlar: V38-1..9 tüm değişiklikler, V37 özellikleri, FIX-P0..P3
+ * [V38-2] detectLockedOdds() — BÖLÜM 0.8 (YENİ):
+ *   • 615 "donmuş oran" vakası tespit edildi
+ *   • Açılış vs kapanış farkı < %0.5 = kilitli market
+ *   • lockScore hesaplaması: kaç market kilitli?
+ *   • Kilitli maçlarda effectiveLift * 0.65 cezası
+ *
+ * [V38-3] calcOpeningGapSignal() — BÖLÜM 0.9 (YENİ KRİTİK):
+ *   • ms1 %10-20 DÜŞTÜ → ev win SADECE %47.5 (random altı!) → TUZAK
+ *   • ms1 %20-30 DÜŞTÜ → ev win %47.8 → TUZAK
+ *   • ms1 %30+ DÜŞTÜ → ev win %22-30 → GÜÇLÜ TUZAK
+ *   • ms1 %10-30 YÜKSELDİ → ev win %19-31 → away boost (ev zayıfladı)
+ *   • Bu bulgu "eve para girdi = güçlü ev" varsayımını çürütüyor
+ *
+ * [V38-4] compressionFactor — calcMoneyFlow() içine:
+ *   • ev_cum<-2 VE dep_cum<-2 → ev win sadece %43.1 (analiz: n=627)
+ *   • ev_cum<-5 VE dep_cum<-5 → ev win %40.8 (analiz: n=331)
+ *   • Sıkıştırma tespiti: compressionFactor = 0.70
+ *   • Sıkıştırmada X/X sinyali BOOST alır (draw rate %25.5-27.5)
+ *
+ * [V38-5] OU sinyal eşiği iyileştirmesi (VERİ BAZLI):
+ *   • ou25.over <= 1.35: %64.6 over (güçlü) ✓
+ *   • ou25.over <= 1.45: %62.7 over (yeterli) ✓
+ *   • ou25.over <= 1.50: %60.5 (makul) ✓
+ *   • OU25_WEAK_THR: 1.50 → 1.45 (btts eşiği daha sıkı)
+ *   • BTTS_CONFIRM_THR: 1.70 → 1.60 (confirmation gereksinimi arttı)
+ *   • Saf OU drop sinyali (önceki kapanış şoku olmadan) = %51 random → hafifletildi
+ *
+ * [V38-6] X/X Balanced Market Bootstrap (YENİ KURAL):
+ *   • Cache: ms1≈ms2 (±0.5 içinde) + draw<3.20 → beraberlik %33.3 (n=228)
+ *   • Bootstrap katmanına X/X balanced kuralı eklendi
+ *   • Sıkıştırma durumunda X/X lift +%25 bonus
+ *
+ * [V38-7] detectMarketSwitch() — Snapshot filtresi:
+ *   • 483 zig-zag maç tespit edildi (cache: n=267 FT verisiyle)
+ *   • Zig-zag maç: ev win %45.7 vs stabil %44.5 (fark marjinal)
+ *   • Zig-zag penalty: mild, effectiveLift * 0.90 (dramatik değil)
+ *   • Sadece 3+ yön değişiminde 0.85x uygulanır
+ *
+ * [V38-8] Gap anomali → MS_1 bastırma:
+ *   • ms1 açılıştan >%10 düşüşü → MS_1 sinyali bastırılır (TUZAK)
+ *   • ms1 açılıştan >%10 yükselişi → MS_2 sinyali BOOST alır
+ *   • evaluateSmartSignals() içine entegre edildi
+ *
+ * [V38-9] Divergence düzeltmesi:
+ *   • ÖNCEKİ: "ms1 down + ms2 up = ev_dominant" → cache: %46.9 ev win (random altı!)
+ *   • YENİ: divergence = çelişkili sinyal → trendStrength = 'conflicted'
+ *   • Conflicted durumda MS_1/MS_2 lift azalır, X/X artar
+ *
+ * v3.7'den korunanlar: V37-1..6 tüm değişiklikler, FIX-P0..P3
  */
 'use strict';
 
@@ -20,36 +64,6 @@ const https      = require('https');
 const fs         = require('fs');
 const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
-const { exec }   = require('child_process'); // [V4.0] Otonom Python tetikleyicisi için eklendi
-
-// ── Dinamik Konfigürasyon (Otomatik Güncellenir) [V4.0] ───────────────
-let dynamicConfig = {
-  TRIVIAL_ODDS_THR: 1.40,
-  OU25_WEAK_THR: 1.45,
-  OU35_WEAK_THR: 1.45,
-  GAP_LIGHT_THR: 0.10,
-  GAP_MODERATE_THR: 0.20,
-  GAP_STRONG_THR: 0.30,
-  COMPRESSION_THR: -2.0,
-  COMPRESSION_FACTOR: 0.70,
-  EXPLORE_RATE: 0.10, // %10 ihtimalle kuralları esnetip yeni pattern arar
-  LAST_TUNED_AT: null
-};
-
-function loadDynamicConfig() {
-  if (fs.existsSync('dynamic_config.json')) {
-    try {
-      const raw = fs.readFileSync('dynamic_config.json', 'utf8');
-      dynamicConfig = { ...dynamicConfig, ...JSON.parse(raw) };
-      console.log(`[Otonom] Dinamik config yüklendi. Son Optimizasyon: ${dynamicConfig.LAST_TUNED_AT || 'Yok'}`);
-    } catch (e) { console.warn('[Otonom] Config okuma hatası, varsayılanlar devrede.'); }
-  }
-}
-
-function saveDynamicConfig() {
-  fs.writeFileSync('dynamic_config.json', JSON.stringify(dynamicConfig, null, 2));
-}
-// ──────────────────────────────────────────────────────────────────────
 
 // ── Config ────────────────────────────────────────────────────────────
 const INTERVAL_MS          = parseInt(process.env.INTERVAL_MS          || '300000');
@@ -75,7 +89,13 @@ const MAX_PENDING_AGE_H    = 8;
 
 // [FIX-P2-2] OU eşik seviyeleri
 const OU25_STRONG_THR = 1.35;
+const OU25_WEAK_THR   = 1.45; // [V38-5] 1.50 → 1.45 (veri: <=1.45 = %62.7 doğruluk)
 const OU35_STRONG_THR = 1.35;
+const OU35_WEAK_THR   = 1.45; // [V38-5] 1.50 → 1.45
+
+// [V37-3][V38-1] Trivial sinyal eşiği — VERİ BAZLI: 1.30 → 1.40
+// Cache analizi: ms1 1.40-1.50 aralığı = %48.8 ev win (random seviye)
+const TRIVIAL_ODDS_THR = 1.40;
 
 // [V37-4] Closing shock eşiği
 const CLOSING_SHOCK_THR = 0.10;
@@ -93,6 +113,19 @@ const UNDER_LEARNED_THR = 0.55;
 const LOCK_DIFF_THR    = 0.005; // %0.5 altı hareket = kilitli
 const LOCK_MIN_MARKETS = 3;     // kaç market kilitli olmalı?
 const LOCK_LIFT_FACTOR = 0.65;  // kilitli maç lift çarpanı
+
+// [V38-3] Gap anomali eşikleri — VERİ BAZLI
+// ms1 >%10 düştü → ev win %47.5 (random altı = TUZAK!)
+// ms1 >%20 düştü → ev win %47.8 (hâlâ tuzak)
+// ms1 >%30 düştü → ev win %22-30 (güçlü tuzak)
+const GAP_LIGHT_THR    = 0.10; // %10 = hafif anomali
+const GAP_MODERATE_THR = 0.20; // %20 = orta anomali
+const GAP_STRONG_THR   = 0.30; // %30 = güçlü anomali
+
+// [V38-4] Sıkıştırma eşiği — her iki yön de baskı altındaysa
+// Cache: ev_cum<-2 AND dep_cum<-2 → ev win %43.1 (n=627)
+const COMPRESSION_THR   = -2.0;
+const COMPRESSION_FACTOR = 0.70;
 
 // [V38-5] BTTS confirmation eşiği
 const BTTS_CONFIRM_THR = 1.60; // 1.70 → 1.60 (daha sıkı doğrulama)
@@ -132,7 +165,7 @@ let memory       = {
   trapPatterns:           {},
   matchHistory:           [],
   marketDirectionPatterns: {},
-  version:        7,      // [V40] versiyon artırıldı
+  version:        6,      // [V38] versiyon artırıldı
   totalLearned:   0,
 };
 let cycleCount = 0;
@@ -143,6 +176,7 @@ const FOCUS_RESULTS = ['1/1', '2/1', '1/X', '2/X', 'X/X', 'X/2', 'X/1', '2/2', '
 // ════════════════════════════════════════════════════════════════════
 // BÖLÜM 0 — DOĞRULUK MOTORU
 // ════════════════════════════════════════════════════════════════════
+const EXPLORE_RATE = 0.0;
 
 function resolvePendingSignal(fid, actualResult, scoreData = null) {
   const pending = memory.pendingSignals[fid];
@@ -217,7 +251,7 @@ function getAccuracyMultiplier(signalType) {
     return { multiplier: 1.4, label: `🟢 %${(accuracy*100).toFixed(0)} doğru`, accuracy };
 
   if (accuracy <= ACCURACY_PENALTY_THR) {
-    if (Math.random() < dynamicConfig.EXPLORE_RATE) // [V4.0] Dinamik Config'e bağlandı
+    if (Math.random() < EXPLORE_RATE)
       return { multiplier: 0.6, label: '🔵 keşif', accuracy, isExplore: true };
     return { multiplier: 0.0, label: `🔴 %${(accuracy*100).toFixed(0)} doğru — bastırıldı`, accuracy };
   }
@@ -519,6 +553,13 @@ function describeMarketDirection(directions) {
 // BÖLÜM 0.8 — KİLİTLİ ORAN & MARKET SWITCH TESPİTİ [V38-2, V38-7]
 // ════════════════════════════════════════════════════════════════════
 
+/**
+ * [V38-2] Kilitli oran tespiti.
+ * Cache analizi: 615 maçta açılış = kapanış (donmuş market).
+ * Donmuş market → bilgi içeriği yok → sinyal güvenilirliği düşük.
+ *
+ * @returns {{ isLocked: boolean, lockScore: number, lockedMarkets: string[], note: string }}
+ */
 function detectLockedOdds(openingMarkets, latestMarkets) {
   if (!openingMarkets || !latestMarkets) return { isLocked: false, lockScore: 0, lockedMarkets: [], note: '' };
 
@@ -556,9 +597,17 @@ function detectLockedOdds(openingMarkets, latestMarkets) {
   return { isLocked, lockScore, lockedMarkets, note };
 }
 
+/**
+ * [V38-7] Market switch (zig-zag) tespiti.
+ * Cache analizi: 483 zig-zag maç, ev win %45.7 (stabil maçlar %44.5 ile karşılaştırıldığında marjinal fark).
+ * Mild penalty uygulanır (dramatik değil).
+ *
+ * @returns {{ isZigZag: boolean, zigZagScore: number, signChanges: number, zigZagFactor: number }}
+ */
 function detectMarketSwitch(snapshots) {
   if (!snapshots || snapshots.length < 3) return { isZigZag: false, zigZagScore: 0, signChanges: 0, zigZagFactor: 1.0 };
 
+  // MS1 yönü için zig-zag
   const ms1Vals = snapshots.map(s => s.markets?.['1x2']?.home).filter(v => v && v > 0);
   if (ms1Vals.length < 3) return { isZigZag: false, zigZagScore: 0, signChanges: 0, zigZagFactor: 1.0 };
 
@@ -576,9 +625,31 @@ function detectMarketSwitch(snapshots) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 0.9 — AÇILIŞ GAP SİNYALİ [V38-3]
+// BÖLÜM 0.9 — AÇILIŞ GAP SİNYALİ [V38-3] — KRİTİK BULGU
 // ════════════════════════════════════════════════════════════════════
 
+/**
+ * [V38-3] Açılış→Kapanış gap anomali tespiti.
+ *
+ * CACHE ANALİZİ BULGULARI (n=1422 FT maç):
+ *   ms1 -%10 ile -%20 düştü: ev win %47.5  ← random ALTINDA = TUZAK
+ *   ms1 -%20 ile -%30 düştü: ev win %47.8  ← yine tuzak
+ *   ms1 -%30 ile -%50 düştü: ev win %30.0  ← güçlü tuzak
+ *   ms1 -%50+   düştü:       ev win %22.2  ← çok güçlü tuzak
+ *
+ *   ms1 +%10 ile +%20 yükseldi: ev win %31.1 → away güçlü (ev zayıfladı)
+ *   ms1 +%20 ile +%30 yükseldi: ev win %19.0 → away çok güçlü
+ *   ms1 +%30+ yükseldi:         ev win %57.1 → (extreme: az örnek, seçim hatası var)
+ *
+ * Bu bulgu "eve para girdi = ev güçlendi" varsayımını çürütüyor.
+ * MS1 büyük düşüş = piyasa manipülasyonu veya oyunu bozacak bilgi.
+ *
+ * @returns {{
+ *   isTrap: boolean, trapLevel: 'none'|'light'|'moderate'|'strong'|'extreme',
+ *   trapFactor: number, gapPct: number, direction: 'down'|'up'|'none',
+ *   awayBoost: boolean, awayBoostFactor: number, gapNote: string
+ * }}
+ */
 function calcOpeningGapSignal(openingMarkets, latestMarkets) {
   const ms1Open  = openingMarkets?.['1x2']?.home;
   const ms1Close = latestMarkets?.['1x2']?.home;
@@ -592,19 +663,24 @@ function calcOpeningGapSignal(openingMarkets, latestMarkets) {
   const dropped = gap < 0;
   const rose    = gap > 0;
 
-  if (dropped && absGap >= dynamicConfig.GAP_LIGHT_THR) {
+  // ── MS1 Düştü (eve para girdi ama bu EV WIN TAHMİNİNİ BOZUYOR!) ──
+  if (dropped && absGap >= GAP_LIGHT_THR) {
     let trapLevel, trapFactor;
 
     if (absGap >= 0.50) {
+      // ms1 ≥%50 düştü → ev win %22.2 → ÇOK GÜÇLÜ TUZAK
       trapLevel  = 'extreme';
-      trapFactor = 0.25; 
-    } else if (absGap >= dynamicConfig.GAP_STRONG_THR) {
+      trapFactor = 0.25; // MS_1 sinyalini neredeyse tamamen sil
+    } else if (absGap >= GAP_STRONG_THR) {
+      // ms1 %30-50 düştü → ev win %30 → GÜÇLÜ TUZAK
       trapLevel  = 'strong';
       trapFactor = 0.40;
-    } else if (absGap >= dynamicConfig.GAP_MODERATE_THR) {
+    } else if (absGap >= GAP_MODERATE_THR) {
+      // ms1 %20-30 düştü → ev win %47.8 → ORTA TUZAK
       trapLevel  = 'moderate';
       trapFactor = 0.60;
     } else {
+      // ms1 %10-20 düştü → ev win %47.5 → HAFİF TUZAK
       trapLevel  = 'light';
       trapFactor = 0.75;
     }
@@ -618,9 +694,12 @@ function calcOpeningGapSignal(openingMarkets, latestMarkets) {
     };
   }
 
-  if (rose && absGap >= dynamicConfig.GAP_LIGHT_THR) {
-    const awayBoostFactor = absGap >= dynamicConfig.GAP_MODERATE_THR ? 1.35
-                          : absGap >= dynamicConfig.GAP_LIGHT_THR    ? 1.20
+  // ── MS1 Yükseldi (ev zayıfladı) → Away sinyal güçlendi ──
+  if (rose && absGap >= GAP_LIGHT_THR) {
+    // ms1 +%10-20 → ev win %31.1 (away güçlü)
+    // ms1 +%20-30 → ev win %19.0 (away çok güçlü)
+    const awayBoostFactor = absGap >= GAP_MODERATE_THR ? 1.35
+                          : absGap >= GAP_LIGHT_THR    ? 1.20
                           : 1.0;
     return {
       isTrap: false, trapLevel: 'none', trapFactor: 1.0,
@@ -638,8 +717,6 @@ function calcOpeningGapSignal(openingMarkets, latestMarkets) {
 // BÖLÜM 1 — CACHE & MEMORY
 // ════════════════════════════════════════════════════════════════════
 function loadCache() {
-  loadDynamicConfig(); // [V4.0] Dinamik konfigürasyonu yükle
-  
   if (fs.existsSync(CACHE_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -662,7 +739,7 @@ function loadCache() {
         trapPatterns:            loaded.trapPatterns            || {},
         matchHistory:            loaded.matchHistory            || [],
         marketDirectionPatterns: loaded.marketDirectionPatterns || {},
-        version: 7, totalLearned: loaded.totalLearned || 0,
+        version: 6, totalLearned: loaded.totalLearned || 0,
       };
       console.log(
         `[Memory] ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} öğrenme` +
@@ -697,11 +774,11 @@ function saveCache() {
   fs.writeFileSync(CACHE_FILE,  JSON.stringify(obj,        null, 2));
   fs.writeFileSync(FIRED_FILE,  JSON.stringify(firedAlerts, null, 2));
   fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory,      null, 2));
-  saveDynamicConfig(); // [V4.0]
   pushToGit();
 }
 
 function pushToGit() {
+  const { execSync } = require('child_process');
   try {
     if (fs.existsSync('.git/rebase-merge') || fs.existsSync('.git/rebase-apply')) {
       console.warn('[Git] ⚠️ Takılı rebase tespit edildi, abort...');
@@ -710,7 +787,7 @@ function pushToGit() {
     if (fs.existsSync('.git/MERGE_HEAD')) { try { execSync('git merge --abort', { stdio: 'pipe' }); } catch {} }
     execSync('git config user.email "scorepop@bot.com"', { stdio: 'pipe' });
     execSync('git config user.name "ScorePop Bot"',      { stdio: 'pipe' });
-    execSync('git add learned_memory.json tracker_cache.json fired_alerts.json dynamic_config.json', { stdio: 'pipe' });
+    execSync('git add learned_memory.json tracker_cache.json fired_alerts.json', { stdio: 'pipe' });
     const staged = execSync('git diff --cached --name-only', { stdio: 'pipe' }).toString().trim();
     if (!staged) { console.log('[Git] ⏩ Değişiklik yok.'); return; }
     execSync(`git commit -m "chore: memory update ${new Date().toISOString().slice(0,16).replace('T',' ')}"`, { stdio: 'pipe' });
@@ -818,6 +895,11 @@ function ftGroups(changes) {
   return { ev_ft:s('1/1')+s('2/1')+s('X/1'), dep_ft:s('1/2')+s('2/2')+s('X/2'), bera:s('1/X')+s('2/X')+s('X/X') };
 }
 
+/**
+ * [V38-4] calcMoneyFlow — compressionFactor eklendi.
+ * Cache analizi: ev_cum<-2 AND dep_cum<-2 → ev win %43.1 (n=627)
+ * Her iki taraf da baskı altındaysa = piyasa karışık sinyal veriyor.
+ */
 function calcMoneyFlow(markets, changes, cumCache) {
   const htft = changes?.ht_ft || {};
   const htft_ev  = (htft['1/1']||0) + (htft['2/1']||0) + (htft['X/1']||0);
@@ -834,13 +916,15 @@ function calcMoneyFlow(markets, changes, cumCache) {
   const ev_ft  = hasHtFtSignal ? htft_ev  + ev_proxy  * 0.2 : ev_proxy;
   const dep_ft = hasHtFtSignal ? htft_dep + dep_proxy * 0.2 : dep_proxy;
 
+  // [V38-4] compressionFactor: her iki kümülâtif de negatifse sinyal zayıf
   let compressionFactor = 1.0;
   let compressionNote   = '';
   if (cumCache) {
     const evCum  = (cumCache.ev_ft_cum  || 0) + (ev_ft  < 0 ? ev_ft  : 0);
     const depCum = (cumCache.dep_ft_cum || 0) + (dep_ft < 0 ? dep_ft : 0);
-    if (evCum < dynamicConfig.COMPRESSION_THR && depCum < dynamicConfig.COMPRESSION_THR) {
-      compressionFactor = evCum < -5 && depCum < -5 ? 0.60 : dynamicConfig.COMPRESSION_FACTOR;
+    if (evCum < COMPRESSION_THR && depCum < COMPRESSION_THR) {
+      // Cache: ev_cum<-5 dep_cum<-5 → ev win sadece %40.8 (n=331)
+      compressionFactor = evCum < -5 && depCum < -5 ? 0.60 : COMPRESSION_FACTOR;
       compressionNote   = `🗜️ Sıkıştırma (ev:${evCum.toFixed(1)} dep:${depCum.toFixed(1)}) → faktör:${compressionFactor}`;
     }
   }
@@ -941,7 +1025,7 @@ function calcFromOpen(openingMarkets, currMarkets) {
 
 function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) {
   const mk=(k,s)=>markets?.[k]?.[s]??null;
-  const moneyFlow = calcMoneyFlow(markets, changes || {}, cumCache);
+  const moneyFlow = calcMoneyFlow(markets, changes || {}, cumCache); // [V38-4] cumCache eklendi
   const { ev_ft, dep_ft, compressionFactor, compressionNote } = moneyFlow;
   const ms1=mk('1x2','home'), ms2=mk('1x2','away'), iy1=mk('ht_1x2','home'), iy2=mk('ht_1x2','away');
   const sy1=mk('2h_1x2','home'), iyms21=mk('ht_ft','2/1'), iyms22=mk('ht_ft','2/2');
@@ -996,8 +1080,12 @@ function extractFeatures(markets, changes, cumCache, snapshots, openingMarkets) 
   }
   f.ev_momentum=evMomentum; f.dep_momentum=depMomentum;
 
+  // [V38-9] Divergence düzeltmesi
+  // Cache: ms1 down + ms2 up → ev win %46.9 (RANDOM ALTI!)
+  // Bu "güçlü ev sinyali" DEĞİL → 'conflicted' olarak etiketlendi
   f.div_ev_to_dep = (f.ev_ft_sign==='neg' && f.dep_ft_sign==='pos') ? 'yes' : 'no';
   f.div_strong_ev = (f.ev_ft_sign==='neg' && f.dep_ft_sign==='neg') ? 'yes' : 'no';
+  // [V38-9] Gerçek divergence — her iki taraf da hareket etti ama zıt yönde
   f.is_conflicted = (f.ev_ft_sign !== 'flat' && f.dep_ft_sign !== 'flat' && f.ev_ft_sign !== f.dep_ft_sign) ? 'yes' : 'no';
 
   return { raw:{ ms1, ms2, iy1, iy2, sy1, iyms21, iyms22, iyms11, iyms12, au25o, bttsY, dcg2h, ev_ft, dep_ft, compressionFactor, compressionNote }, buckets:f, hasHtFt };
@@ -1115,7 +1203,7 @@ function predictWithSimilarity(stateKey) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 8 — AKILLI SİNYAL MOTORU [V38+V4.0 entegrasyonu]
+// BÖLÜM 8 — AKILLI SİNYAL MOTORU [V38 entegrasyonu]
 // ════════════════════════════════════════════════════════════════════
 function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMarkets, fingerprint) {
   const features   = extractFeatures(markets, changes, cumCache, snapshots, openingMarkets);
@@ -1131,17 +1219,30 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
   const similarMatches = findSimilarMatches(markets);
   const signals        = [];
 
+  // [V38-2] Kilitli oran tespiti
   const lockInfo   = detectLockedOdds(openingMarkets, markets);
+
+  // [V38-3] Gap anomali tespiti (KRİTİK)
   const gapInfo    = calcOpeningGapSignal(openingMarkets, markets);
+
+  // [V38-7] Zig-zag tespiti
   const zigzagInfo = detectMarketSwitch(snapshots);
+
+  // [V37-1] Market yönü tahmini
   const dirPred    = getMarketDirectionPrediction(openingMarkets, markets);
+
+  // [V37-4] Kapanış şoku tespiti
   const closingShocks  = detectLastMinuteMovements(snapshots, null);
   const hasClosingShock = closingShocks && closingShocks.length > 0;
 
+  // [V38-4] Sıkıştırma → trendStrength güncellendi
+  // [V38-9] Divergence düzeltmesi
   let trendStrength;
   if (compressionFactor < 1.0) {
+    // Her iki taraf da baskı altında → sıkıştırma
     trendStrength = 'compressed';
   } else if (b.is_conflicted === 'yes') {
+    // [V38-9] Zıt yönlü hareket = ÇATIŞAN sinyal, eski "ev_dominant" yanıltıcıydı
     trendStrength = 'conflicted';
   } else if (b.ev_momentum === 'falling' && b.dep_momentum === 'rising') {
     trendStrength = 'strong_reversal';
@@ -1174,11 +1275,13 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     if (raw.iyms12 && raw.iyms12 <= 22 && depCum <= -0.5)
       bsPush('1/2',  `İYMS12=${raw.iyms12?.toFixed(1)} dep_cum=${depCum.toFixed(2)}`, 5.0, 1.4, 0.14);
 
+    // [V38-6] X/X Balanced market bootstrap — Cache: ms1≈ms2 + draw<3.20 → beraberlik %33.3
     const ms1 = raw.ms1, ms2 = raw.ms2, msx = markets?.['1x2']?.draw;
     if (ms1 && ms2 && msx && Math.abs(ms1 - ms2) <= 0.5 && msx < 3.20) {
-      const xxBoost = trendStrength === 'compressed' ? 1.45 : 1.25; 
+      const xxBoost = trendStrength === 'compressed' ? 1.45 : 1.25; // [V38-4] Sıkıştırmada daha güçlü X/X
       bsPush('X/X', `Dengeli: ms1=${ms1?.toFixed(2)} ms2=${ms2?.toFixed(2)} draw=${msx?.toFixed(2)} (cache:%33.3 beraberlik)`, 5.5, xxBoost, 0.16);
       if (!hasHtFt) {
+        // nohtft'de X/X pattern'ı da güçlendir
         const xxPattern = '1/X';
         bsPush('1/X', `Dengeli piyasa: çift şans`, 4.5, 1.15, 0.12);
       }
@@ -1202,29 +1305,6 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     let liftVal       = p.lift;
     let effectiveLift = +(liftVal * multiplier).toFixed(2);
 
-    // [V4.0] Otonom Keşif ve Sönümleme Katmanı ─────────────────────────
-    const isExplore = Math.random() < dynamicConfig.EXPLORE_RATE;
-    let isShadowSignal = false;
-
-    // 1. KURAL ESNETME (EXPLORATION)
-    if (isExplore && p.prob >= 0.15 && p.prob < 0.20) {
-        isShadowSignal = true; 
-        effectiveLift = +(effectiveLift * 1.5).toFixed(2); 
-        rule = `🕵️‍♂️ GÖLGE KEŞİF: ${rule}`;
-    }
-
-    // 2. TIME-DECAY (ZAMANLA SÖNÜMLEME)
-    if (memory.patterns[stateKey]?.[outcome]?.firstSeen) {
-        const ageMs = Date.now() - new Date(memory.patterns[stateKey][outcome].firstSeen).getTime();
-        const ageDays = ageMs / (1000 * 3600 * 24);
-        if (ageDays > 90) { 
-            const decayFactor = Math.max(0.60, 1 - (ageDays / 365)); 
-            effectiveLift = +(effectiveLift * decayFactor).toFixed(2);
-            rule = `⏳ Eskimiş Patern (x${decayFactor.toFixed(2)}) + ${rule}`;
-        }
-    }
-    // ─────────────────────────────────────────────────────────────────
-
     if (trapInfo.risk >= 0.5) { effectiveLift=+(effectiveLift*(1-trapInfo.risk*0.6)).toFixed(2); precision=Math.max(1,precision-trapInfo.risk*2); rule=`⚠️Tuzak(${(trapInfo.risk*100).toFixed(0)}%) + ${rule}`; }
     if (decisive && decisive.correctFallingRate > decisive.incorrectFallingRate) {
       if (fingerprint?.trajectories?.[decisive.market] === 'falling_steady') { effectiveLift=+(effectiveLift*1.15).toFixed(2); rule=`✅BelirleyiciMkt(${decisive.market}) + ${rule}`; }
@@ -1241,36 +1321,41 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     if (outcome==='1/1' && raw.ev_ft<=-2 && raw.dep_ft>=1)   precision+=0.4;
     if (outcome==='2/2' && raw.dep_ft<=-2)                   precision+=0.4;
 
+    // [V38-4] Sıkıştırma cezası — MS_1/MS_2 sinyalleri bastır, X/X boost
     if (compressionFactor < 1.0) {
       if (outcome === '1/1' || outcome === '1/X' || outcome === '1/2') {
         effectiveLift = +(effectiveLift * compressionFactor).toFixed(2);
         rule = `🗜️Sıkıştırma + ${rule}`;
       }
       if (outcome === 'X/X' || outcome === 'X/1' || outcome === 'X/2') {
-        effectiveLift = +(effectiveLift * 1.15).toFixed(2); 
+        effectiveLift = +(effectiveLift * 1.15).toFixed(2); // X/X sıkıştırmada boost
       }
     }
 
+    // [V38-3] Gap anomali — MS_1 bastır
     if (gapInfo.isTrap && (outcome==='1/1'||outcome==='1/X'||outcome==='1/2')) {
       effectiveLift = +(effectiveLift * gapInfo.trapFactor).toFixed(2);
       rule = `${gapInfo.gapNote.substring(0,30)} + ${rule}`;
     }
+    // Gap yükseldi → MS_2 boost
     if (gapInfo.awayBoost && (outcome==='2/2'||outcome==='2/X'||outcome==='2/1')) {
       effectiveLift = +(effectiveLift * gapInfo.awayBoostFactor).toFixed(2);
       rule = `📈GapAway(x${gapInfo.awayBoostFactor}) + ${rule}`;
     }
 
+    // [V38-2] Kilitli oran cezası
     if (lockInfo.isLocked) {
       effectiveLift = +(effectiveLift * LOCK_LIFT_FACTOR).toFixed(2);
       rule = `🔒Kilitli + ${rule}`;
     }
 
+    // [V38-7] Zig-zag mild penalty
     if (zigzagInfo.isZigZag) {
       effectiveLift = +(effectiveLift * zigzagInfo.zigZagFactor).toFixed(2);
     }
 
     const minProb = (p.total>=20)?0.18:(p.total>=10)?0.20:(p.total>=5)?0.22:0.11;
-    if (p.prob < minProb && !isShadowSignal) continue; // Gölge sinyal prob dinlemez
+    if (p.prob < minProb) continue;
 
     let htFtNote = '';
     if (!hasHtFt) {
@@ -1279,7 +1364,7 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       if (tier==='ELITE') tier='PREMIER'; if (tier==='PREMIER') tier='STANDART';
     }
 
-    signals.push({ type:outcome, tier, rule:`${rule} | hist=${p.count}/${p.total}${htFtNote}`, prec:+precision.toFixed(2), lift:liftVal, effectiveLift, prob:p.prob, stateKey, trendStrength, histCount:p.count, accLabel, accuracy, hasHtFt, trapRisk:trapInfo.risk, trapReason:trapInfo.reason, similarCount:similarMatches.length, decisiveMarket:decisive, isShadowSignal });
+    signals.push({ type:outcome, tier, rule:`${rule} | hist=${p.count}/${p.total}${htFtNote}`, prec:+precision.toFixed(2), lift:liftVal, effectiveLift, prob:p.prob, stateKey, trendStrength, histCount:p.count, accLabel, accuracy, hasHtFt, trapRisk:trapInfo.risk, trapReason:trapInfo.reason, similarCount:similarMatches.length, decisiveMarket:decisive });
   }
 
   // ── nohtft sinyal filtresi ─────────────────────────────────────
@@ -1298,43 +1383,56 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       const { multiplier, label: accLabel, accuracy } = getAccuracyMultiplier('MS_' + ms);
       if (multiplier === 0.0) continue;
 
-      const isTrivialMs1 = ms==='1' && raw.ms1 && raw.ms1 < dynamicConfig.TRIVIAL_ODDS_THR;
-      const isTrivialMs2 = ms==='2' && raw.ms2 && raw.ms2 < dynamicConfig.TRIVIAL_ODDS_THR;
+      // [V38-1] Trivial sinyal filtresi — VERİ BAZLI: 1.40 (eski 1.30)
+      const isTrivialMs1 = ms==='1' && raw.ms1 && raw.ms1 < TRIVIAL_ODDS_THR;
+      const isTrivialMs2 = ms==='2' && raw.ms2 && raw.ms2 < TRIVIAL_ODDS_THR;
       if (isTrivialMs1 || isTrivialMs2) {
         const trivialAcc = accuracy ?? 0;
-        if (trivialAcc < 0.80) { console.log(`[V38-1] MS_${ms} trivial (oran=${ms==='1'?raw.ms1?.toFixed(2):raw.ms2?.toFixed(2)}<${dynamicConfig.TRIVIAL_ODDS_THR}) bastırıldı`); continue; }
+        if (trivialAcc < 0.80) { console.log(`[V38-1] MS_${ms} trivial (oran=${ms==='1'?raw.ms1?.toFixed(2):raw.ms2?.toFixed(2)}<${TRIVIAL_ODDS_THR}) bastırıldı`); continue; }
         console.log(`[V38-1] MS_${ms} trivial ama doğruluk yüksek (%${(trivialAcc*100).toFixed(0)}) — izin verildi`);
       }
 
+      // [V38-3] Gap anomali → MS_1 bastır
       if (ms === '1' && gapInfo.isTrap && gapInfo.trapFactor < 0.50) {
         console.log(`[V38-3] MS_1 gap-tuzak bastırıldı (trapFactor=${gapInfo.trapFactor})`);
         continue;
       }
 
+      // [V38-9] Conflicted durumda MS sinyali zayıflatılır
       const conflictPenalty = trendStrength === 'conflicted' ? 0.80 : 1.0;
 
       let effectiveLift = +(lift * multiplier * conflictPenalty).toFixed(2);
       let tier = lift >= 1.5 ? 'PREMIER' : 'STANDART';
 
+      // [V38-4] Sıkıştırma → MS_1 bastır, X/X boost
       if (compressionFactor < 1.0 && ms === '1') {
         effectiveLift = +(effectiveLift * compressionFactor).toFixed(2);
         console.log(`[V38-4] MS_1 sıkıştırma cezası uygulandı: x${compressionFactor}`);
       }
 
+      // [V38-2] Kilitli oran
       if (lockInfo.isLocked) { effectiveLift = +(effectiveLift * LOCK_LIFT_FACTOR).toFixed(2); if (tier==='PREMIER') tier='STANDART'; }
+
+      // [V38-7] Zig-zag
       if (zigzagInfo.isZigZag) effectiveLift = +(effectiveLift * zigzagInfo.zigZagFactor).toFixed(2);
+
+      // [V37-4] Kapanış şoku bonus
       if (hasClosingShock) { effectiveLift=+(effectiveLift*1.20).toFixed(2); if (tier==='STANDART') tier='PREMIER'; }
+
+      // [V38-3] Away boost
       if (ms === '2' && gapInfo.awayBoost) {
         effectiveLift = +(effectiveLift * gapInfo.awayBoostFactor).toFixed(2);
         if (tier === 'STANDART') tier = 'PREMIER';
       }
 
+      // [V37-1] Yön tahmini uyum
       let dirNote = '';
       if (dirPred && dirPred.msBest === ms && dirPred.msProb > 0.55 && dirPred.count >= 5) {
         effectiveLift = +(effectiveLift * 1.10).toFixed(2);
         dirNote = ` | 📐yön:${ms}(%${(dirPred.msProb*100).toFixed(0)},${dirPred.count}x)`;
       }
 
+      // Tier güncelle
       if (effectiveLift >= 1.8) tier = 'PREMIER';
       if (effectiveLift >= 2.5) tier = 'ELITE';
 
@@ -1356,6 +1454,7 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       });
     }
 
+    // ── OU25 SİNYALLERİ [V38-5 + V37-2] ─────────────────────────
     const ou25o        = features.raw.au25o;
     const bttsY        = features.raw.bttsY;
     const ou25Available = !!(markets?.ou25?.over);
@@ -1378,13 +1477,16 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     }
 
     if (ou25Available && ou25o) {
+      // [V38-5] OU25 OVER — Cache: ou25.over<=1.35 %64.6, <=1.45 %62.7 (güvenilir)
       if (ou25o < OU25_STRONG_THR) {
         const ouLockFactor = lockInfo.isLocked ? LOCK_LIFT_FACTOR : 1.0;
         msSignals.push({ type:'OU25_OVER', tier:'PREMIER', rule:`[nohtft-OU25-GÜÇLÜ] ou25.over=${ou25o?.toFixed(2)} (<${OU25_STRONG_THR}) | cache:%64.6 doğruluk`, prec:7.5, lift:1.8, effectiveLift:+(1.8*ouLockFactor).toFixed(2), prob:ou25OverProb??0.68, stateKey, trendStrength:'bootstrap', histCount:ou25Pat?.['OVER25']?.count||0, accLabel:ou25OverProb!=null?`öğrenilmiş(%${(ou25OverProb*100).toFixed(0)})`:'bootstrap', accuracy:ou25OverProb, hasHtFt:false, trapRisk:0, similarCount:0, decisiveMarket:null });
-      } else if (ou25o < dynamicConfig.OU25_WEAK_THR && bttsY && bttsY < BTTS_CONFIRM_THR) {
+      } else if (ou25o < OU25_WEAK_THR && bttsY && bttsY < BTTS_CONFIRM_THR) {
+        // [V38-5] BTTS eşiği 1.70 → 1.60 (daha sıkı doğrulama gerekiyor)
         msSignals.push({ type:'OU25_OVER', tier:'STANDART', rule:`[nohtft-OU25-ZAYIF] ou25.over=${ou25o?.toFixed(2)} + btts.yes=${bttsY?.toFixed(2)} (btts<${BTTS_CONFIRM_THR})`, prec:5.5, lift:1.4, effectiveLift:1.4, prob:ou25OverProb??0.55, stateKey, trendStrength:'bootstrap', histCount:ou25Pat?.['OVER25']?.count||0, accLabel:ou25OverProb!=null?`öğrenilmiş(%${(ou25OverProb*100).toFixed(0)})`:'bootstrap', accuracy:ou25OverProb, hasHtFt:false, trapRisk:0, similarCount:0, decisiveMarket:null });
       }
 
+      // OU25 UNDER
       const marketExpectsUnder = ou25u && ou25u < UNDER_ODDS_THR && ou25o > UNDER_OVER_MIN;
       const learnedExpectsUnder = ou25UnderProb !== null && ou25UnderProb > UNDER_LEARNED_THR;
       const dirExpectsUnder = dirPred && dirPred.ouUnderProb > 0.60 && dirPred.count >= 5;
@@ -1396,12 +1498,13 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       }
     }
 
+    // ── OU35 sinyalleri ───────────────────────────────────────────
     const ou35=markets?.['ou35']?.over??null, ou35u=markets?.['ou35']?.under??null;
     const ou35Available=!!(markets?.ou35?.over);
     if (ou35Available && ou35) {
       if (ou35 < OU35_STRONG_THR) {
         msSignals.push({ type:'OU35_OVER', tier:'PREMIER', rule:`[nohtft-OU35-GÜÇLÜ] ou35.over=${ou35?.toFixed(2)} (<${OU35_STRONG_THR})`, prec:7.5, lift:1.8, effectiveLift:1.8, prob:ou35OverProb??0.68, stateKey, trendStrength:'bootstrap', histCount:ou35Pat?.['OVER35']?.count||0, accLabel:ou35OverProb!=null?`öğrenilmiş(%${(ou35OverProb*100).toFixed(0)})`:'bootstrap', accuracy:ou35OverProb, hasHtFt:false, trapRisk:0, similarCount:0, decisiveMarket:null });
-      } else if (ou35 < dynamicConfig.OU35_WEAK_THR && bttsY && bttsY < BTTS_CONFIRM_THR) {
+      } else if (ou35 < OU35_WEAK_THR && bttsY && bttsY < BTTS_CONFIRM_THR) {
         msSignals.push({ type:'OU35_OVER', tier:'STANDART', rule:`[nohtft-OU35-ZAYIF] ou35.over=${ou35?.toFixed(2)} + btts.yes=${bttsY?.toFixed(2)}`, prec:5.5, lift:1.4, effectiveLift:1.4, prob:ou35OverProb??0.55, stateKey, trendStrength:'bootstrap', histCount:ou35Pat?.['OVER35']?.count||0, accLabel:ou35OverProb!=null?`öğrenilmiş(%${(ou35OverProb*100).toFixed(0)})`:'bootstrap', accuracy:ou35OverProb, hasHtFt:false, trapRisk:0, similarCount:0, decisiveMarket:null });
       }
       const ou35MarketExpectsUnder=ou35u&&ou35u<UNDER_ODDS_THR&&ou35>UNDER_OVER_MIN;
@@ -1413,6 +1516,7 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
       }
     }
 
+    // [V38-6] X/X nohtft balanced market sinyal boost
     const ms1n=raw.ms1, ms2n=raw.ms2, msxn=markets?.['1x2']?.draw;
     if (ms1n && ms2n && msxn && Math.abs(ms1n-ms2n) <= 0.5 && msxn < 3.20 && !signals.some(s=>s.type==='X/X')) {
       const { multiplier:xxMult, label:xxAccLabel, accuracy:xxAccuracy } = getAccuracyMultiplier('MS_X');
@@ -1438,10 +1542,12 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     const mlExisting = finalSignals.find(s => s.type === mlOutcome);
 
     if (mlExisting) {
+      // Aynı tahmin zaten varsa sadece lift'ini artır
       const boost = Math.min(1.20, 1.0 + (mlProb - 0.38) * 1.5);
       mlExisting.effectiveLift = +(mlExisting.effectiveLift * boost).toFixed(2);
       mlExisting.rule = `[ML-boost×${boost.toFixed(2)}] ` + mlExisting.rule;
     } else if (mlLift >= 1.5) {
+      // Yeni ML sinyali ekle
       finalSignals.push({
         type:          mlOutcome,
         tier:          mlProb >= 0.50 ? 'PREMIER' : 'STANDART',
@@ -1464,6 +1570,7 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
     }
     console.log(`[ML] ${stateKey.substring(0,40)} → ${mlOutcome} (%${(mlProb*100).toFixed(0)}) ${mlExisting ? 'BOOST' : 'YENİ SİNYAL'}`);
   }
+  // ─────────────────────────────────────────────────────────────────
 
   const tierW={ELITE:3,PREMIER:2,STANDART:1};
   finalSignals.sort((a,c) => (tierW[c.tier]||0)-(tierW[a.tier]||0) || c.effectiveLift-a.effectiveLift);
@@ -1472,7 +1579,7 @@ function evaluateSmartSignals(markets, changes, cumCache, snapshots, openingMark
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 9 — YEREL YORUM
+// BÖLÜM 9 — YEREL YORUM [V38 eklentileri]
 // ════════════════════════════════════════════════════════════════════
 function generateLocalInterpretation(matchData) {
   const { signals, features, predictions, stateKey, hasHtFt, dirPred, closingShocks, lockInfo, gapInfo, zigzagInfo, compressionFactor, compressionNote } = matchData;
@@ -1486,19 +1593,24 @@ function generateLocalInterpretation(matchData) {
   if (f.ev_momentum==='falling') mkt+='Ev FT oranları düşüyor. ';
   if (f.dep_momentum==='rising') mkt+='Dep FT oranları yükseliyor. ';
 
+  // [V38-3] Gap anomali notu
   let gapNote = '';
   if (gapInfo.isTrap)     gapNote = `\n${gapInfo.gapNote}`;
   else if (gapInfo.awayBoost) gapNote = `\n${gapInfo.gapNote}`;
 
+  // [V38-2] Kilitli oran notu
   let lockNote = '';
   if (lockInfo?.isLocked) lockNote = `\n${lockInfo.note}`;
 
+  // [V38-4] Sıkıştırma notu
   let compNote = '';
   if (compressionFactor < 1.0) compNote = `\n${compressionNote}`;
 
+  // [V38-7] Zig-zag notu
   let zigNote = '';
   if (zigzagInfo?.isZigZag) zigNote = `\n🔀 Zig-zag market (${zigzagInfo.signChanges} yön değişim) → lift x${zigzagInfo.zigZagFactor}`;
 
+  // [V37-1] Market yön notu
   let dirNote = '';
   if (dirPred && dirPred.count >= 3) {
     const dirs=dirPred.directions;
@@ -1508,6 +1620,7 @@ function generateLocalInterpretation(matchData) {
     else if (dirPred.ouOverProb > 0.55) dirNote+=` | OVER beklentisi %${(dirPred.ouOverProb*100).toFixed(0)}`;
   }
 
+  // [V37-4] Kapanış şoku
   let shockNote = '';
   if (closingShocks && closingShocks.length > 0) {
     const shockDesc=closingShocks.map(s=>`${s.market}.${s.sub}: ${s.fromVal}→${s.toVal} (${s.pctChange>0?'+':''}${s.pctChange}%)`).join(', ');
@@ -1551,7 +1664,7 @@ function generateLocalInterpretation(matchData) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 10 — SİNYAL LOGGER
+// BÖLÜM 10 — SİNYAL LOGGER [V38 etiketleri]
 // ════════════════════════════════════════════════════════════════════
 function logSignals(matchesWithSignals, cycleNo) {
   const now=new Date().toLocaleString('tr-TR',{timeZone:'Europe/Istanbul'});
@@ -1564,13 +1677,12 @@ function logSignals(matchesWithSignals, cycleNo) {
     const htFtTag=m.hasHtFt===false?' [⚠ IY/MS YOK]':'';
     const trapTag=top.trapRisk>=0.5?` [🪤 TUZAK %${(top.trapRisk*100).toFixed(0)}]`:'';
     const shockTag=(m.closingShocks&&m.closingShocks.length>0)?' [⚡ KAPANIŞ-ŞOKU]':'';
+    // [V38] Yeni etiketler
     const lockTag=m.lockInfo?.isLocked?' [🔒 KİLİTLİ]':'';
     const gapTag=m.gapInfo?.isTrap?` [⚠️ GAP-TUZAK(${m.gapInfo.trapLevel})]`:m.gapInfo?.awayBoost?` [📈 GAP-AWAY]`:'';
     const compTag=m.compressionFactor<1.0?` [🗜️ SIKI]`:'';
     const zzTag=m.zigzagInfo?.isZigZag?` [🔀 ZZ${m.zigzagInfo.signChanges}]`:'';
-    const shadowTag=top.isShadowSignal?` [🕵️‍♂️ GÖLGE]`:'';
-
-    console.log(`\n${tierColor[top.tier]||'⚪'} ${m.name}${htFtTag}${trapTag}${shockTag}${lockTag}${gapTag}${compTag}${zzTag}${shadowTag}`);
+    console.log(`\n${tierColor[top.tier]||'⚪'} ${m.name}${htFtTag}${trapTag}${shockTag}${lockTag}${gapTag}${compTag}${zzTag}`);
     console.log(`   ⏰ ${m.h2k<0?'Başladı':m.h2k<1?Math.round(m.h2k*60)+' dk sonra':m.h2k.toFixed(1)+' saat sonra'}`);
     console.log(`   📈 Ev kümülâtif: ${m.ev_ft_cum.toFixed(2)} | Dep: ${m.dep_ft_cum.toFixed(2)} | Sıkıştırma: ${m.compressionFactor<1?'VAR':'yok'}`);
     if (top.similarCount>0) console.log(`   🔍 Benzer geçmiş: ${top.similarCount} | Belirleyici: ${top.decisiveMarket?.market||'yok'}`);
@@ -1582,7 +1694,7 @@ function logSignals(matchesWithSignals, cycleNo) {
       const accStr=s.accuracy!==null&&s.accuracy!==undefined?` | Doğruluk: %${(s.accuracy*100).toFixed(0)} (${s.accLabel})`:'';
       const shockStr=s.closingShock?' ⚡':'';
       console.log(`   ${tierColor[s.tier]} [${s.tier}] ${s.type}${shockStr} | Lift: ${s.lift}x → Efektif: ${s.effectiveLift}x | Olas: %${(s.prob*100).toFixed(1)}${accStr}`);
-      console.log(`     ↳ ${s.rule}`);
+      console.log(`      ↳ ${s.rule}`);
     }
     if (m.interpretation) { console.log('   '+'─'.repeat(50)); for (const line of m.interpretation.split('\n')) if (line.trim()) console.log('   '+line); }
   }
@@ -1678,7 +1790,7 @@ async function syncLiveMatches() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// BÖLÜM 13 — ANA DÖNGÜ VE OTONOM BAKIM [V4.0]
+// BÖLÜM 13 — ANA DÖNGÜ [V38 entegrasyonu]
 // ════════════════════════════════════════════════════════════════════
 function hoursToKickoff(ko) {
   if (!ko) return 999;
@@ -1689,40 +1801,15 @@ function hoursToKickoff(ko) {
   } catch { return 999; }
 }
 
-// [V4.0] Otonom Bakım Rutini
-function checkAndRunAutonomousMaintenance() {
-  const now = new Date();
-  // Pazar günleri (0) saat 03:00 - 03:05 arasında çalışır
-  if (now.getDay() === 0 && now.getHours() === 3 && now.getMinutes() < 5) {
-      console.log("🛠️ [OTONOM BAKIM] Haftalık Model Yeniden Eğitimi ve Optimizasyonu Başlıyor...");
-      
-      exec('python3 autonomous_trainer.py', (error, stdout, stderr) => {
-          if (error) {
-              console.error(`[Otonom Hata] Python Betiği Çöktü: ${error.message}`);
-              return;
-          }
-          if (stderr) console.warn(`[Otonom Uyarı] ${stderr}`);
-          
-          console.log(`[Otonom Başarı] ${stdout}`);
-          loadDynamicConfig(); // Yeni eşikleri içeri al
-          loadMlPredictions(); // Yeni XGBoost tahminlerini içeri al
-          console.log("🧠 Model zekası başarıyla güncellendi!");
-      });
-  }
-}
-
 async function runCycle() {
   cycleCount++;
-  
-  //checkAndRunAutonomousMaintenance(); // [V4.0] Otonom bakım kontrolü
-
   const elapsed=Math.round((Date.now()-startTime)/60000);
   const bootstrapMode=memory.totalLearned<BOOTSTRAP_THRESHOLD;
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`[Tracker] Döngü #${cycleCount} | ${new Date().toISOString()} | +${elapsed}dk`);
   console.log(`[Memory]  ${Object.keys(memory.patterns).length} pattern | ${memory.totalLearned} öğrenme${bootstrapMode?` | ⚡ BOOTSTRAP (${memory.totalLearned}/${BOOTSTRAP_THRESHOLD})`:''}`);
-  console.log(`[V38/V4.0] Trivial:${dynamicConfig.TRIVIAL_ODDS_THR} | OU25-weak:${dynamicConfig.OU25_WEAK_THR} | BTTS-confirm:${BTTS_CONFIRM_THR} | LockThr:${LOCK_DIFF_THR} | Gap:${dynamicConfig.GAP_LIGHT_THR*100}%/${dynamicConfig.GAP_MODERATE_THR*100}%/${dynamicConfig.GAP_STRONG_THR*100}%`);
-  console.log(`[V38/V4.0] CompThr:${dynamicConfig.COMPRESSION_THR} (factor:${dynamicConfig.COMPRESSION_FACTOR}) | ZigZag:mild${ZIGZAG_MILD_FACTOR}/strong${ZIGZAG_STRONG_FACTOR}`);
+  console.log(`[V38]     Trivial:${TRIVIAL_ODDS_THR} | OU25-weak:${OU25_WEAK_THR} | BTTS-confirm:${BTTS_CONFIRM_THR} | LockThr:${LOCK_DIFF_THR} | Gap:${GAP_LIGHT_THR*100}%/${GAP_MODERATE_THR*100}%/${GAP_STRONG_THR*100}%`);
+  console.log(`[V38]     CompThr:${COMPRESSION_THR} (factor:${COMPRESSION_FACTOR}) | ZigZag:mild${ZIGZAG_MILD_FACTOR}/strong${ZIGZAG_STRONG_FACTOR}`);
   console.log('═'.repeat(60));
 
   // [V39-ML] Her 20 döngüde ML tahminlerini güncelle
@@ -1757,6 +1844,8 @@ async function runCycle() {
     const fid=fix.fixture_id, prev=matchCache.get(fid);
     const changes=prev?.latestMarkets?calcDelta(prev.latestMarkets, currMarkets):{};
 
+    // NOT: ev_ft_cum yalnızca negatif değerleri biriktirir (ev oddsı düştüğünde para girişi)
+    // Bu tasarım kasıtlı: kümülâtif negatif değer = toplam ev baskısı
     const { ev_ft, dep_ft } = calcMoneyFlow(currMarkets, changes, {
       ev_ft_cum:  prev?.ev_ft_cum  || 0,
       dep_ft_cum: prev?.dep_ft_cum || 0,
@@ -1768,6 +1857,7 @@ async function runCycle() {
     const lastSnapTime=snapshots.length>0?new Date(snapshots[snapshots.length-1].time).getTime():0;
     const timeSinceLastSnap=Date.now()-lastSnapTime;
 
+    // [FIX-P0-2 + V37-4] Rapid-fire guard
     let isShock=false;
     if (prev?.latestMarkets&&timeSinceLastSnap<MIN_SNAP_INTERVAL_MS) {
       const shockPairs=[['1x2','home'],['1x2','away'],['ou25','over'],['ou25','under']];
@@ -1836,15 +1926,20 @@ async function runCycle() {
 // ════════════════════════════════════════════════════════════════════
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  ScorePop Adaptive v4.0 — Otonom Zeka Güncellemesi       ║');
+  console.log('║  ScorePop Adaptive v3.8 — Cache Analizi Bazlı Güncelleme ║');
   console.log(`║  Döngü: ${Math.round(INTERVAL_MS/60000)}dk | Süre: ${Math.round(MAX_RUNTIME_MS/3600000)}sa | DryRun: ${String(DRY_RUN).padEnd(6)}║`);
-  console.log('║  ─────────────────────────────────────────────────────   ║');
-  console.log(`║  [V40-1] dynamicConfig entegrasyonu tamamlandı           ║`);
-  console.log(`║  [V40-2] Gölge Sinyal: Keşif (Exploration) modu eklendi  ║`);
-  console.log(`║  [V40-3] Time-Decay: Eski pattern lift'leri düşürülecek  ║`);
-  console.log(`║  [V40-4] Otonom Bakım: Pazar geceleri Python tetiklenir  ║`);
-  console.log('║  ─────────────────────────────────────────────────────   ║');
-  console.log('║  v3.8 ve v3.7 özellikleri tamamen korundu.               ║');
+  console.log('║  ─────────────────────────────────────────────────────  ║');
+  console.log(`║  [V38-1] TRIVIAL_ODDS_THR : 1.30 → 1.40 (veri bazlı)  ║`);
+  console.log(`║  [V38-2] detectLockedOdds : 615 kilitli vaka tespit     ║`);
+  console.log(`║  [V38-3] calcOpeningGap   : ms1↓>%10 → ev win %47.5!  ║`);
+  console.log(`║  [V38-4] compressionFactor: ev+dep↓ → X/X boost        ║`);
+  console.log(`║  [V38-5] OU25_WEAK_THR    : 1.50 → 1.45 (BTTS→1.60)  ║`);
+  console.log(`║  [V38-6] X/X balanced     : ms1≈ms2 → %33.3 beraberlik ║`);
+  console.log(`║  [V38-7] detectZigZag     : mild penalty x0.90/0.85    ║`);
+  console.log(`║  [V38-8] Gap→MS bastır    : evaluateSmartSignals içinde ║`);
+  console.log(`║  [V38-9] Divergence düzelt: conflicted trend (cache:46.9%)||`);
+  console.log('║  ─────────────────────────────────────────────────────  ║');
+  console.log('║  v3.7 özellikleri korundu: V37-1..6, FIX-P0..P3       ║');
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   loadCache();
@@ -1861,7 +1956,7 @@ async function main() {
   logAccuracyReport(); logTrapReport(); saveCache();
   console.log('\n╔══════════════════════════════════════════════════════════╗');
   console.log('║  OTURUM TAMAMLANDI                                       ║');
-  console.log(`║  V4.0 Döngü        : ${String(cycleCount).padEnd(40)}║`);
+  console.log(`║  V3.8 Döngü        : ${String(cycleCount).padEnd(40)}║`);
   console.log(`║  İzlenen           : ${String(matchCache.size).padEnd(40)}║`);
   console.log(`║  Pattern           : ${String(Object.keys(memory.patterns).length).padEnd(40)}║`);
   console.log(`║  Öğrenilen         : ${String(memory.totalLearned).padEnd(40)}║`);
