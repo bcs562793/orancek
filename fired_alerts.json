@@ -7829,11 +7829,23 @@
   "4467206": [
     "OU25_UNDER_PREMIER"
   ],
+  "4467467": [
+    "X/X_ELITE"
+  ],
   "4467582": [
     "OU35_UNDER_PREMIER"
   ],
   "4467626": [
     "OU25_UNDER_PREMIER",
     "OU25_OVER_STANDART"
+  ],
+  "4467627": [
+    "1/1_PREMIER"
+  ],
+  "4467628": [
+    "OU25_OVER_STANDART"
+  ],
+  "4467629": [
+    "OU35_UNDER_STANDART"
   ]
 }
