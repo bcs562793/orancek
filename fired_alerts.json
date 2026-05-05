@@ -7851,6 +7851,9 @@
     "OU35_UNDER_PREMIER",
     "OU35_UNDER_STANDART"
   ],
+  "4467132": [
+    "OU35_UNDER_PREMIER"
+  ],
   "4467133": [
     "OU35_UNDER_STANDART"
   ],
@@ -7868,7 +7871,8 @@
   ],
   "4467209": [
     "OU25_UNDER_STANDART",
-    "MS_X_STANDART"
+    "MS_X_STANDART",
+    "1/1_STANDART"
   ],
   "4467467": [
     "X/X_ELITE"
