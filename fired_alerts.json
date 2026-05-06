@@ -6601,7 +6601,17 @@
   ],
   "4317607": [
     "X/X_PREMIER",
-    "OU35_UNDER_STANDART"
+    "OU35_UNDER_STANDART",
+    "2/2_PREMIER"
+  ],
+  "4317610": [
+    "MS_1_STANDART"
+  ],
+  "4317611": [
+    "2/2_STANDART"
+  ],
+  "4317612": [
+    "OU25_UNDER_PREMIER"
   ],
   "4319370": [
     "OU25_OVER_STANDART"
@@ -7336,7 +7346,8 @@
     "1/1_ELITE"
   ],
   "4435361": [
-    "OU25_UNDER_PREMIER"
+    "OU25_UNDER_PREMIER",
+    "OU25_UNDER_STANDART"
   ],
   "4435363": [
     "OU25_UNDER_PREMIER"
@@ -7682,6 +7693,9 @@
   ],
   "4452977": [
     "OU25_OVER_STANDART"
+  ],
+  "4453053": [
+    "1/1_PREMIER"
   ],
   "4453054": [
     "1/1_PREMIER"
