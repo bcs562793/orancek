@@ -6983,7 +6983,8 @@
   ],
   "4363373": [
     "OU25_UNDER_STANDART",
-    "1/1_PREMIER"
+    "1/1_PREMIER",
+    "OU25_UNDER_PREMIER"
   ],
   "4363376": [
     "1/1_PREMIER"
@@ -7575,6 +7576,9 @@
   ],
   "4446598": [
     "1/1_PREMIER"
+  ],
+  "4446599": [
+    "X/X_PREMIER"
   ],
   "4446682": [
     "OU35_UNDER_PREMIER",
