@@ -7700,6 +7700,9 @@
   "4460379": [
     "2/2_STANDART"
   ],
+  "4460380": [
+    "X/X_STANDART"
+  ],
   "4460391": [
     "X/X_ELITE"
   ],
@@ -7795,7 +7798,8 @@
     "1/1_PREMIER"
   ],
   "4466372": [
-    "OU35_UNDER_PREMIER"
+    "OU35_UNDER_PREMIER",
+    "OU25_UNDER_STANDART"
   ],
   "4466429": [
     "2/1_STANDART",
