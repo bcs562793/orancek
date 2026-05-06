@@ -6603,7 +6603,8 @@
     "X/X_PREMIER",
     "OU35_UNDER_STANDART",
     "2/2_PREMIER",
-    "1/1_STANDART"
+    "1/1_STANDART",
+    "OU25_OVER_STANDART"
   ],
   "4317610": [
     "MS_1_STANDART"
@@ -7708,7 +7709,8 @@
     "OU25_OVER_STANDART"
   ],
   "4453053": [
-    "1/1_PREMIER"
+    "1/1_PREMIER",
+    "OU25_OVER_STANDART"
   ],
   "4453054": [
     "1/1_PREMIER"
